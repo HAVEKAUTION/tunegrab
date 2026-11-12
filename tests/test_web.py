@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from tests.fakes import ALBUM_ID, FakeServices
 from tunegrab.config import Settings, read_config_file
 from tunegrab.web import app as web_app
+from tunegrab.web import jobs as web_jobs
 from tunegrab.web.app import create_app
 
 ALBUM = f"https://open.spotify.com/album/{ALBUM_ID}"
@@ -122,13 +123,13 @@ def test_retry_all_failures_is_single_shot(client: TestClient, services: FakeSer
 def test_slow_page_gets_a_resync_instead_of_lost_events(client: TestClient) -> None:
     manager = client.app.state.manager  # type: ignore[attr-defined]
     queue = manager.subscribe()
-    for n in range(web_app.MAX_QUEUED_EVENTS + 5):
+    for n in range(web_jobs.MAX_QUEUED_EVENTS + 5):
         manager._publish("task", {"n": n})
     messages = []
     while not queue.empty():
         messages.append(queue.get_nowait())
     manager.unsubscribe(queue)
-    assert messages[0] == web_app.RESYNC_EVENT
+    assert messages[0] == web_jobs.RESYNC_EVENT
     assert len(messages) == 6 and '"n": 1004' in messages[-1]
 
 
@@ -453,7 +454,7 @@ def test_video_link_browse_and_download(
         out.write_bytes(b"v")
         return out, "720p H.264 + AAC 130 kbps", False
 
-    monkeypatch.setattr(web_app, "probe", fake_probe)
+    monkeypatch.setattr(web_jobs, "probe", fake_probe)
     monkeypatch.setattr(video.VideoDownloader, "download", fake_download)
     clips: list[tuple[float | None, float | None]] = []
     monkeypatch.setattr(
@@ -517,7 +518,7 @@ def test_unexpected_video_probe_error_ends_the_job(
     def broken(url: str, cookies: str | None = None) -> Any:
         raise TypeError("'NoneType' object is not subscriptable")
 
-    monkeypatch.setattr(web_app, "probe", broken)
+    monkeypatch.setattr(web_jobs, "probe", broken)
     created = client.post("/api/video", json={"url": "https://youtu.be/dQw4w9WgXcQ"}).json()
     job = wait_for(client, created["id"], ("error",))
     assert "TypeError" in job["error"]
