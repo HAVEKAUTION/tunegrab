@@ -17,7 +17,8 @@ from tunegrab.metadata.resolver import Resolver
 from tunegrab.metadata.spotify_api import SpotifyAPIProvider
 from tunegrab.models import Match, Track
 from tunegrab.net import HttpClient, get_client
-from tunegrab.pipeline import EventCallback, Pipeline
+from tunegrab.pipeline import Pipeline
+from tunegrab.runner import EventCallback
 from tunegrab.tagging.lyrics import LyricsClient
 from tunegrab.tagging.tagger import MutagenTagger
 

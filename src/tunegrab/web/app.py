@@ -48,6 +48,7 @@ from tunegrab.models import Candidate, Collection, Job, Match, TaskStatus, Track
 from tunegrab.net import NetworkError
 from tunegrab.pipeline import Pipeline
 from tunegrab.preflight import JobAborted
+from tunegrab.runner import unexpected_message as unexpected_error
 from tunegrab.services import Services, build_services
 from tunegrab.urls import (
     InvalidURLError,
@@ -77,14 +78,6 @@ SYSTEM_CACHE_S = 60.0
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})
 HEARTBEAT_S = 15.0
 SHUTDOWN_WAIT_S = 15.0  # how long a stopping server lets running songs finish cleanly
-
-
-def unexpected_error(exc: BaseException) -> str:
-    """A user-facing sentence for an error nobody anticipated (the traceback goes to the log)."""
-    detail = str(exc).strip().splitlines()[0][:200] if str(exc).strip() else ""
-    name = type(exc).__name__
-    what = f"{name}: {detail}" if detail else name
-    return f"Something unexpected went wrong ({what}). The details are in the TuneGrab log."
 
 
 class VideoRequest(BaseModel):

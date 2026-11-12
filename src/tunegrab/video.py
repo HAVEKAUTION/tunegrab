@@ -44,7 +44,6 @@ from tunegrab.download.ytdlp import (
     base_options,
     classify_error,
     clean_error,
-    describe_failure,
     extract,
     run_ladder,
     source_info,
@@ -52,8 +51,9 @@ from tunegrab.download.ytdlp import (
 from tunegrab.errors import TuneGrabError
 from tunegrab.library.paths import move_into_place, sanitize_segment
 from tunegrab.models import Collection, Job, TaskStatus, Track, TrackTask
-from tunegrab.pacing import Pacer, youtube_pacer
-from tunegrab.preflight import DISK_FULL, check_folder, is_disk_full
+from tunegrab.pacing import Pacer
+from tunegrab.preflight import check_folder
+from tunegrab.runner import Cancelled, EventCallback, TaskRunner
 
 log = logging.getLogger(__name__)
 
@@ -63,8 +63,6 @@ NO_SR = "[format_id!$=-sr]"  # YouTube's AI-upscaled "super resolution" copies
 MAX_PLAYLIST_VIDEOS = 2000
 TMP_DIR_NAME = ".tunegrab-tmp"
 FFMPEG_TIMEOUT_S = 3600
-
-EventCallback = Callable[[Job, TrackTask | None], None]
 
 
 class VideoError(TuneGrabError):
@@ -532,7 +530,7 @@ def build_job(found: VideoProbe, options: VideoOptions) -> tuple[Job, dict[str, 
 
 
 @dataclass
-class VideoPipeline:
+class VideoPipeline(TaskRunner):
     """Runs a video job: one video at a time (sites throttle parallel video downloads)."""
 
     settings: Settings
@@ -561,21 +559,6 @@ class VideoPipeline:
         if self.options.mode == "audio":
             return self.settings.resolved_output_dir
         return self.settings.resolved_video_dir
-
-    def cancel(self) -> None:
-        self.cancel_event.set()
-
-    def _emit(self, job: Job, task: TrackTask | None = None) -> None:
-        if self.on_event is not None:
-            try:
-                self.on_event(job, task)
-            except Exception:
-                log.exception("event callback failed")
-
-    def _set(self, job: Job, task: TrackTask, status: TaskStatus, message: str = "") -> None:
-        task.status = status
-        task.message = message
-        self._emit(job, task)
 
     async def run(self, job: Job) -> Job:
         """Raises :class:`~tunegrab.preflight.JobAborted` if the folder is unusable."""
@@ -607,56 +590,24 @@ class VideoPipeline:
             task.path = str(target)
             self._set(job, task, TaskStatus.SKIPPED, "already downloaded")
             return
-        attempts = self.settings.retries + 1
-        for attempt in range(1, attempts + 1):
-            task.attempts = attempt
-            pacer = self.pacer or youtube_pacer(bool(self.settings.cookies_from_browser))
-            wait = pacer.reserve()
-            if wait > 0:
-                self._set(
-                    job,
-                    task,
-                    task.status,
-                    f"Pacing downloads to stay under YouTube's limit: starting in {wait:.0f} s",
-                )
-                if self.cancel_event.wait(wait):
-                    self._set(job, task, TaskStatus.SKIPPED, "cancelled")
-                    return
-            try:
-                self._download(job, task, entry, target)
-                return
-            except DownloadCancelled:
-                self._set(job, task, TaskStatus.SKIPPED, "cancelled")
-                return
-            except (DownloadError, OSError) as exc:
-                if is_disk_full(exc):
-                    self._abort(job, task, entry)
-                    return
-                kind = exc.kind if isinstance(exc, DownloadError) else "other"
-                if attempt < attempts and kind != "unavailable":
-                    log.info("retrying video %s after: %s", entry.url, exc)
-                    if self.cancel_event.wait(self.retry_backoff * attempt):
-                        self._set(job, task, TaskStatus.SKIPPED, "cancelled")
-                        return
-                    continue
-                task.error = describe_failure(exc)
-                task.failed_stage = "downloading"
-                log.warning("video failed: %s: %s", entry.url, exc)
-                self._set(job, task, TaskStatus.FAILED, task.error)
-                return
-            except Exception as exc:  # one broken video must not stop the rest of the job
-                log.exception("video failed unexpectedly: %s", entry.url)
-                task.error = f"Something unexpected went wrong ({type(exc).__name__}: {exc})"
-                task.failed_stage = "downloading"
-                self._set(job, task, TaskStatus.FAILED, task.error)
-                return
 
-    def _abort(self, job: Job, task: TrackTask, entry: VideoEntry) -> None:
-        log.warning("stopping the video job: disk full (%s)", entry.url)
-        self.abort_reason = DISK_FULL
-        task.error = DISK_FULL
-        task.failed_stage = "downloading"
-        self._set(job, task, TaskStatus.FAILED, task.error)
+        def attempt() -> None:
+            self._pace(job, task)
+            self._download(job, task, entry, target)
+
+        def retryable(exc: Exception) -> bool:
+            if isinstance(exc, DownloadError):
+                return exc.kind != "unavailable"
+            return isinstance(exc, OSError)
+
+        try:
+            self._run_attempts(job, task, attempt, retryable)
+        except (Cancelled, DownloadCancelled):
+            self._set(job, task, TaskStatus.SKIPPED, "cancelled")
+        except Exception as exc:  # one broken video must not stop the rest of the job
+            if task.status in (TaskStatus.QUEUED, TaskStatus.SKIPPED):
+                task.status = TaskStatus.DOWNLOADING  # so the failure names the stage
+            self._fail_with(job, task, exc)
 
     def _download(self, job: Job, task: TrackTask, entry: VideoEntry, target: Path) -> None:
         assert self.downloader is not None

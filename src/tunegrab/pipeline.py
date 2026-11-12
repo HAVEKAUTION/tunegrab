@@ -29,7 +29,6 @@ from tunegrab.download.ytdlp import (
     Downloader,
     DownloadError,
     SourceInfo,
-    describe_failure,
 )
 from tunegrab.library.archive import Archive
 from tunegrab.library.paths import move_into_place, render_path, template_fields
@@ -37,8 +36,9 @@ from tunegrab.library.playlists import playlist_file, write_m3u8
 from tunegrab.matching.matcher import Matcher
 from tunegrab.metadata.resolver import Resolver
 from tunegrab.models import Candidate, Collection, Job, Match, TaskStatus, Track, TrackTask
-from tunegrab.pacing import Pacer, youtube_pacer
-from tunegrab.preflight import DISK_FULL, check_folder, is_disk_full
+from tunegrab.pacing import Pacer
+from tunegrab.preflight import check_folder
+from tunegrab.runner import Cancelled, EventCallback, TaskFailed, TaskRunner
 from tunegrab.tagging.lyrics import Lyrics, write_lrc
 from tunegrab.urls import is_spotify_input
 
@@ -58,8 +58,6 @@ RATE_LIMIT_GAVE_UP = (
     "YouTube keeps refusing downloads from your connection. Wait an hour or two, then press Retry."
 )
 MAX_ALTERNATIVES = 3  # other videos to try when the chosen one is unavailable
-
-EventCallback = Callable[[Job, TrackTask | None], None]
 
 
 class Tagger(Protocol):
@@ -82,18 +80,8 @@ class QueryLookup(Protocol):
     def __call__(self, query: str) -> tuple[Track, Match] | None: ...
 
 
-class TaskFailed(Exception):
-    def __init__(self, message: str, *, retryable: bool = True) -> None:
-        super().__init__(message)
-        self.retryable = retryable
-
-
-class Cancelled(Exception):
-    pass
-
-
 @dataclass
-class Pipeline:
+class Pipeline(TaskRunner):
     settings: Settings
     resolver: Resolver
     matcher: Matcher
@@ -149,9 +137,6 @@ class Pipeline:
         return Job(input=text, collection=collection, tasks=tasks)
 
     # --- running ---------------------------------------------------------------------
-    def cancel(self) -> None:
-        self.cancel_event.set()
-
     def resume(self) -> bool:
         """End a rate-limit pause early (the user pressed Try now). False if not paused."""
         with self._cooldown_lock:
@@ -162,29 +147,9 @@ class Pipeline:
         log.info("rate-limit pause ended early by the user")
         return True
 
-    def abort(self, reason: str) -> None:
-        """Stop the whole job because of ``reason`` (the songs not done are failed, so
-        Retry picks them up once the cause is fixed)."""
-        if self.abort_reason is None:
-            self.abort_reason = reason
-            log.warning("stopping the job: %s", reason)
-        self.cancel_event.set()
-
     @property
     def output_dir(self) -> Path:
         return self.settings.resolved_output_dir
-
-    def _emit(self, job: Job, task: TrackTask | None = None) -> None:
-        if self.on_event is not None:
-            try:
-                self.on_event(job, task)
-            except Exception:  # a broken UI must never kill a download
-                log.exception("event callback failed")
-
-    def _set(self, job: Job, task: TrackTask, status: TaskStatus, message: str = "") -> None:
-        task.status = status
-        task.message = message
-        self._emit(job, task)
 
     def _clean_stale_tmp(self) -> Path:
         root = self.output_dir / TMP_DIR_NAME
@@ -306,17 +271,6 @@ class Pipeline:
             if self.cancel_event.wait(min(remaining, 1.0)):  # short: Try now reacts fast
                 raise Cancelled()
 
-    def _pace(self, job: Job, task: TrackTask) -> None:
-        """Wait for a start slot under YouTube's hourly budget (see tunegrab.pacing)."""
-        pacer = self.pacer or youtube_pacer(bool(self.settings.cookies_from_browser))
-        wait = pacer.reserve()
-        if wait <= 0:
-            return
-        task.message = f"Pacing downloads to stay under YouTube's limit: starting in {wait:.0f} s"
-        self._emit(job, task)
-        if self.cancel_event.wait(wait):
-            raise Cancelled()
-
     def _finish_playlist(self, job: Job) -> None:
         collection = job.collection
         if (
@@ -370,45 +324,26 @@ class Pipeline:
         try:
             if self._skip_existing(job, task):
                 return
-            attempts = self.settings.retries + 1
-            for attempt in range(1, attempts + 1):
-                task.attempts = attempt
-                try:
-                    self._attempt(job, task, tmp_root)
-                    return
-                except TaskFailed as exc:
-                    if not exc.retryable or attempt == attempts:
-                        raise
-                    log.info("retrying %s after: %s", task.track.display, exc)
-                except (Cancelled, DownloadCancelled):
-                    raise
-                except Exception as exc:
-                    if attempt == attempts or is_disk_full(exc):
-                        raise TaskFailed(str(exc) or type(exc).__name__) from exc
-                    log.info("retrying %s after: %s", task.track.display, exc)
-                task.message = f"retry {attempt}/{attempts - 1}"
-                self._emit(job, task)
-                if self.cancel_event.wait(self.retry_backoff * attempt):
-                    raise Cancelled()
+            self._run_attempts(
+                job,
+                task,
+                lambda: self._attempt(job, task, tmp_root),
+                retryable=lambda exc: not isinstance(exc, TaskFailed) or exc.retryable,
+            )
         except (Cancelled, DownloadCancelled):
             self._set(job, task, TaskStatus.SKIPPED, "cancelled")
         except Exception as exc:
-            if is_disk_full(exc):
-                self.abort(DISK_FULL)
-            self._fail_task(job, task, DISK_FULL if is_disk_full(exc) else describe_failure(exc))
+            self._fail_with(job, task, exc)
 
-    def _fail_task(self, job: Job, task: TrackTask, error: str) -> None:
-        stage = task.status.value if not task.status.finished else None
-        task.failed_stage = stage
-        task.error = error
-        log.warning("failed: %s at %s: %s", task.track.display, stage, task.error)
-        try:
-            self.archive.record_failure(
-                job.input, job.collection, task.position, task.track, stage, task.error
-            )
-        except Exception:
-            log.exception("could not record failure")
-        self._set(job, task, TaskStatus.FAILED, task.error)
+    def _record_failure(self, job: Job, task: TrackTask) -> None:
+        self.archive.record_failure(
+            job.input,
+            job.collection,
+            task.position,
+            task.track,
+            task.failed_stage,
+            task.error or "",
+        )
 
     def _adopt_existing(self, job: Job, task: TrackTask) -> bool:
         """The song is already in the library under its usual name but missing from the
