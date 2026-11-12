@@ -34,7 +34,7 @@ from tunegrab.config import (
     read_config_file,
     write_config_file,
 )
-from tunegrab.doctor import run_all, update_ytdlp
+from tunegrab.doctor import Status, check_output_dir, run_all, update_ytdlp
 from tunegrab.download.ytdlp import DownloadError
 from tunegrab.imports import collection_from_csv
 from tunegrab.library.paths import TemplateError, validate_template
@@ -528,6 +528,16 @@ def settings_payload(settings: Settings) -> dict[str, Any]:
     return {"values": values, "saved": sorted(read_config_file())}
 
 
+def check_music_folder(folder: Path) -> None:
+    """Raise ValueError (shown in Settings) unless new files can be saved in ``folder``."""
+    folder = folder.expanduser()
+    if not folder.is_absolute():
+        raise ValueError("Use a full folder path (Choose folder fills one in for you).")
+    result = check_output_dir(folder)
+    if result.status is Status.FAIL:
+        raise ValueError(f"TuneGrab can't save music there: {result.detail}")
+
+
 def apply_settings(current: Settings, changes: dict[str, Any]) -> Settings:
     """Validate ``changes``, save them to the config file and return updated settings."""
     unknown = sorted(set(changes) - set(UI_SETTINGS))
@@ -538,6 +548,8 @@ def apply_settings(current: Settings, changes: dict[str, Any]) -> Settings:
         value = coerce_setting(key, "" if raw is None else str(raw).strip())
         if key.endswith("_template") and value:
             validate_template(str(value))
+        if key == "output_dir" and value:
+            check_music_folder(Path(str(value)))
         typed[key] = value
     stored = read_config_file()
     update: dict[str, Any] = {}

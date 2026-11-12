@@ -134,6 +134,19 @@ def test_settings_rejects_bad_values(client: TestClient, bad: dict[str, str]) ->
     assert client.post("/api/settings", json=bad).status_code == 400
 
 
+def test_settings_rejects_unusable_music_folders(
+    client: TestClient, services: FakeServices, tmp_path: Path
+) -> None:
+    before = services.settings.output_dir
+    blocker = tmp_path / "a file"
+    blocker.write_text("x")
+    for folder, reason in ((blocker, "can't save music there"), ("relative/music", "full folder")):
+        response = client.post("/api/settings", json={"output_dir": str(folder)})
+        assert response.status_code == 400 and reason in response.json()["detail"]
+    assert services.settings.output_dir == before
+    assert "output_dir" not in read_config_file()
+
+
 def test_open_only_inside_library(
     client: TestClient, services: FakeServices, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
