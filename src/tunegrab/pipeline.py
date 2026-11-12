@@ -357,8 +357,7 @@ class Pipeline:
         if match.candidate is None or not match.accepted(self.settings.match_threshold):
             best = f"best {match.score:.0f}: {match.reason}" if match.candidate else match.reason
             raise TaskFailed(
-                f"no match above {self.settings.match_threshold:.0f} ({best}). "
-                "Use `tunegrab fix` to choose one.",
+                f"no match above {self.settings.match_threshold:.0f} ({best})",
                 retryable=False,
             )
         candidate = match.candidate

@@ -307,3 +307,43 @@ def test_video_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert "1080p H.264" in result.output
     bad = invoke("video", "https://youtu.be/dQw4w9WgXcQ", "-o", str(tmp_path), "-s", "9:00")
     assert bad.exit_code == 1 and "only 3:33 long" in bad.output
+
+
+def test_app_neutral_messages_get_cli_hints() -> None:
+    from tunegrab.cli import cli_hint
+
+    assert cli_hint("Liked Songs need a Spotify login.") == "Log in with: tunegrab login"
+    assert "tunegrab fix" in cli_hint("no match above 70 (best 52: title 40)")
+    assert "docs/SETUP.md" in cli_hint(
+        "Spotify rejected the client ID/secret. Check SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET"
+    )
+    assert cli_hint("Video unavailable") == ""
+
+
+def test_no_user_facing_message_names_the_cli_or_dotenv() -> None:
+    """Messages that reach the web app must not send people to a terminal or .env (M8)."""
+    import re
+    from pathlib import Path
+
+    import tunegrab
+
+    src = Path(tunegrab.__file__).parent
+    offenders = []
+    for path in src.rglob("*.py"):
+        if path.name == "cli.py" or path.name == "ui.py":
+            continue  # the CLI's own output may name commands
+        text = path.read_text(encoding="utf-8")
+        for literal in re.findall(r'"[^"\n]*"|\'[^\'\n]*\'', text):
+            if re.search(r"`tunegrab \w|run: tunegrab|\.env\b|docs/", literal):
+                offenders.append(f"{path.name}: {literal}")
+    allowed = {
+        'config.py: ".env"',  # the settings source itself
+        'config.py: "# TuneGrab settings. Edit by hand or with `tunegrab config set KEY VALUE`."',
+        'doctor.py: \'Update it: Settings > System > "Update yt-dlp", or run: '
+        "tunegrab doctor --update'",  # names the app path first
+        'youtube.py: "Full metadata for one video (used by ``tunegrab fix``)."',  # docstring
+        'spotify_api.py: "Run `tunegrab login` again."',  # log line
+        'spotify_api.py: "Spotify user token refresh failed (HTTP %s); run `tunegrab login`"',
+        'spotify_api.py: "Set SPOTIFY_CLIENT_ID first (docs/SETUP.md)."',  # `tunegrab login` only
+    }
+    assert sorted(set(offenders) - allowed) == []

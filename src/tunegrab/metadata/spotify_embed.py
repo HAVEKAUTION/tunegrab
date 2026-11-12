@@ -17,11 +17,12 @@ import re
 import threading
 from typing import Any
 
-from tunegrab.metadata.base import MetadataError, NotFoundError, RestrictedError
+from tunegrab.metadata.base import CREDENTIALS_HELP, MetadataError, NotFoundError, RestrictedError
 from tunegrab.models import Collection, Track
 from tunegrab.net import BROWSER_USER_AGENT, HttpClient, NetworkError
 
 log = logging.getLogger(__name__)
+
 
 EMBED_URL = "https://open.spotify.com/embed/{kind}/{id}"
 PAGE_URL = "https://open.spotify.com/{kind}/{id}"
@@ -307,7 +308,7 @@ class SpotifyEmbedProvider:
                     f"Without Spotify API credentials only the first {EMBED_PLAYLIST_LIMIT} "
                     f"tracks of this playlist are visible"
                     + (f" (it has {count})." if count else ".")
-                    + " Add SPOTIFY_CLIENT_ID/SECRET to get them all (docs/SETUP.md)."
+                    + f" Spotify developer credentials show all of them ({CREDENTIALS_HELP})."
                 )
         if skipped:
             warnings.append(f"Skipped {skipped} episode(s) or unavailable item(s).")
@@ -340,7 +341,8 @@ class SpotifyEmbedProvider:
 
     def get_liked(self) -> Collection:
         raise RestrictedError(
-            "Liked Songs are private: they need API credentials and `tunegrab login`."
+            "Liked Songs are private: they need Spotify developer credentials and a Spotify "
+            f"login ({CREDENTIALS_HELP})."
         )
 
     def enrich(self, track: Track) -> Track:

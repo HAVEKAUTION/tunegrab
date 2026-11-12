@@ -23,11 +23,12 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from rapidfuzz import fuzz
 
 from tunegrab.config import Settings, keyring_get, keyring_set
-from tunegrab.metadata.base import MetadataError, NotFoundError, RestrictedError
+from tunegrab.metadata.base import CREDENTIALS_HELP, MetadataError, NotFoundError, RestrictedError
 from tunegrab.models import Collection, Track
 from tunegrab.net import HttpClient, NetworkError
 
 log = logging.getLogger(__name__)
+
 
 API_BASE = "https://api.spotify.com/v1"
 TOKEN_URL = "https://accounts.spotify.com/api/token"
@@ -159,7 +160,7 @@ class SpotifyAuth:
         if response.status_code in (400, 401):
             raise RestrictedError(
                 "Spotify rejected the client ID/secret. Check SPOTIFY_CLIENT_ID and "
-                "SPOTIFY_CLIENT_SECRET (docs/SETUP.md)."
+                f"SPOTIFY_CLIENT_SECRET ({CREDENTIALS_HELP})."
             )
         if not response.is_success:
             raise MetadataError(f"Spotify token request failed: HTTP {response.status_code}")
@@ -416,7 +417,7 @@ class SpotifyAPIProvider:
             raise RestrictedError(
                 f"Spotify API refused access to {path} (HTTP {status}). Development Mode apps "
                 "need a Premium owner and only see some endpoints; private items need "
-                "`tunegrab login`."
+                "a Spotify login."
             )
         if status == 429:
             raise MetadataError("Spotify API rate limit hit; try again in a few minutes.")
@@ -534,7 +535,7 @@ class SpotifyAPIProvider:
 
     def get_liked(self) -> Collection:
         if not self.auth.has_user:
-            raise RestrictedError("Liked Songs need a user login: run `tunegrab login`.")
+            raise RestrictedError("Liked Songs need a Spotify login.")
         tracks = [
             t
             for entry in self._paginate(self._get("/me/tracks", params={"limit": 50}))

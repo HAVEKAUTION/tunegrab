@@ -105,8 +105,23 @@ PlaylistModeOpt = Annotated[
 ]
 
 
+def cli_hint(message: str) -> str:
+    """The command-line next step for a shared (app-voiced) error message, if any."""
+    lowered = message.lower()
+    if "spotify login" in lowered:
+        return "Log in with: tunegrab login"
+    if "no match above" in lowered:
+        return "Choose a YouTube video for it with: tunegrab fix"
+    if "spotify developer credentials" in lowered or "spotify_client" in lowered:
+        return "Setup steps: docs/SETUP.md"
+    return ""
+
+
 def _fail(message: str, code: int = 1) -> typer.Exit:
     console.print(f"[red]Error:[/] {escape(message)}")
+    hint = cli_hint(message)
+    if hint:
+        console.print(f"[dim]{escape(hint)}[/]")
     return typer.Exit(code)
 
 
@@ -187,6 +202,8 @@ def run_jobs(services: Services, builders: list[tuple[str, Any]]) -> list[Job]:
                         job = pipeline.build_job(item)
                 except (MetadataError, InvalidURLError, LookupError, ValueError) as exc:
                     console.print(f"[red]Could not resolve[/] {escape(label)}: {escape(str(exc))}")
+                    if hint := cli_hint(str(exc)):
+                        console.print(f"[dim]{escape(hint)}[/]")
                     continue
             _print_warnings(job.collection)
             if not job.tasks:
@@ -223,6 +240,14 @@ def run_jobs(services: Services, builders: list[tuple[str, Any]]) -> list[Job]:
         if failed is not None:
             console.print(failed)
             console.print("Run [bold]tunegrab retry[/] to try failed tracks again.")
+            if any(
+                t.status == TaskStatus.FAILED and "no match above" in (t.error or "")
+                for job in finished
+                for t in job.tasks
+            ):
+                console.print(
+                    "Choose a YouTube video for unmatched songs with [bold]tunegrab fix[/]."
+                )
         for job in finished:
             collection = job.collection
             if (

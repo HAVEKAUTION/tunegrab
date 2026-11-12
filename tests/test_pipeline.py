@@ -124,7 +124,8 @@ def test_no_match_is_not_retried(tmp_path: Path) -> None:
     job = run(pipeline, ALBUM)
     task = job.tasks[0]
     assert task.status == TaskStatus.FAILED and task.attempts == 1
-    assert task.failed_stage == "matching" and "tunegrab fix" in (task.error or "")
+    assert task.failed_stage == "matching" and "no match above 70" in (task.error or "")
+    assert "tunegrab" not in (task.error or "")  # the app shows its own "Use a YouTube link"
     assert pipeline.downloader.calls == 0  # type: ignore[attr-defined]
 
 

@@ -7,6 +7,9 @@ from typing import Protocol, runtime_checkable
 from tunegrab.models import Collection, Track
 from tunegrab.urls import SpotifyRef
 
+# Where users learn about the optional Spotify app (shown in the app and CLI alike).
+CREDENTIALS_HELP = 'see "Spotify developer credentials" in the README'
+
 
 class MetadataError(Exception):
     """Metadata could not be fetched from this provider."""

@@ -19,6 +19,7 @@ from importlib.metadata import version as package_version
 from pathlib import Path
 
 from tunegrab.config import Settings
+from tunegrab.metadata.base import CREDENTIALS_HELP
 
 MIN_PYTHON = (3, 11)
 _VERSION_TIMEOUT_S = 10
@@ -275,7 +276,8 @@ def check_spotify_credentials(settings: Settings) -> CheckResult:
         label,
         Status.WARN,
         "no (will use the public embed fallback)",
-        "Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in .env (see docs/SETUP.md).",
+        "Optional: only needed for playlists over 100 songs, full artist lists and private "
+        f"playlists ({CREDENTIALS_HELP}).",
     )
 
 
