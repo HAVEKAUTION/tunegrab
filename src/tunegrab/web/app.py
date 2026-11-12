@@ -153,6 +153,7 @@ def job_summary(job: Job) -> dict[str, Any]:
         "warnings": collection.warnings if collection else [],
         "total": len(job.tasks),
         "counts": job.counts(),
+        "retryable": len(job.retryable()) if job.finished_at else 0,
         "created_at": job.created_at.isoformat(),
         "finished_at": job.finished_at.isoformat() if job.finished_at else None,
         "cancelled": job.cancelled,
@@ -190,6 +191,7 @@ def task_payload(job: Job, task: TrackTask) -> dict[str, Any]:
         "path": task.path,
         "source": task.source,
         "low_quality": task.low_quality,
+        "retried": task.id in job.retried,
         "match": (
             {
                 "url": match.candidate.url,
@@ -456,6 +458,8 @@ class JobManager:
 
     async def retry_failures(self) -> Job:
         """One job for every track whose last attempt failed (survives restarts)."""
+        if any(j.input == "retry" and not (j.finished_at or j.error) for j in self.jobs.values()):
+            raise ValueError("Failed songs are already being retried.")
         records = self.services.archive.open_failures()
         if not records:
             raise ValueError("No failed tracks to retry.")
@@ -475,13 +479,15 @@ class JobManager:
     def retry(self, job_id: str, task_ids: set[str] | None = None) -> Job:
         """Re-run the failed tracks of a job (or only ``task_ids`` of them)."""
         old = self.jobs[job_id]
-        failed = [
-            t
-            for t in old.tasks
-            if t.status == TaskStatus.FAILED and (task_ids is None or t.id in task_ids)
-        ]
+        if not old.finished_at:
+            raise ValueError("Wait for this download to finish first.")
+        failed = [t for t in old.retryable() if task_ids is None or t.id in task_ids]
         if not failed:
+            if any(t.id in old.retried for t in old.tasks if task_ids is None or t.id in task_ids):
+                raise ValueError("Already retried; see the newer download.")
             raise ValueError("This job has no failed tracks.")
+        old.retried.update(t.id for t in failed)
+        self._publish("job", job_summary(old))
         tasks = [TrackTask(track=t.track, position=t.position) for t in failed]
         video = self.video_jobs.get(job_id)
         collection = old.collection

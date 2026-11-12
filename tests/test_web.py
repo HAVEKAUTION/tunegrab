@@ -86,6 +86,39 @@ def test_retry_failed(client: TestClient, services: FakeServices) -> None:
     assert again["counts"]["done"] == 3
 
 
+def test_retry_is_single_shot(client: TestClient, services: FakeServices) -> None:
+    services.settings = services.settings.model_copy(update={"retries": 0})
+    services.downloader.fail_times = 3
+    job = wait_for(
+        client, client.post("/api/jobs", json={"url": ALBUM}).json()["id"], ("finished",)
+    )
+    assert job["retryable"] == 3
+    first = client.post(f"/api/jobs/{job['id']}/retry")
+    second = client.post(f"/api/jobs/{job['id']}/retry")
+    assert first.status_code == 202
+    assert second.status_code == 409 and "Already retried" in second.json()["detail"]
+    old = client.get(f"/api/jobs/{job['id']}").json()
+    assert old["retryable"] == 0 and all(t["retried"] for t in old["tasks"])
+    task_fix = f"/api/jobs/{job['id']}/tasks/{old['tasks'][0]['id']}/fix"
+    assert client.post(task_fix, json={"youtube_url": "dQw4w9WgXcQ"}).status_code == 409
+    wait_for(client, first.json()["id"], ("finished",))
+    jobs = [j for j in client.get("/api/jobs").json() if j["input"] == ALBUM]
+    assert len(jobs) == 2  # the original and exactly one retry
+
+
+def test_retry_all_failures_is_single_shot(client: TestClient, services: FakeServices) -> None:
+    services.settings = services.settings.model_copy(update={"retries": 0})
+    services.downloader.fail_times = 3
+    wait_for(client, client.post("/api/jobs", json={"url": ALBUM}).json()["id"], ("finished",))
+    services.downloader.block = threading.Event()
+    first = client.post("/api/failures/retry")
+    second = client.post("/api/failures/retry")
+    assert first.status_code == 202
+    assert second.status_code == 409 and "already being retried" in second.json()["detail"]
+    services.downloader.block.set()
+    wait_for(client, first.json()["id"], ("finished",))
+
+
 def test_events_are_published(client: TestClient) -> None:
     manager = client.app.state.manager  # type: ignore[attr-defined]
     queue = manager.subscribe()

@@ -1054,7 +1054,7 @@ function upsertJob(job) {
   const known = state.jobs.get(job.id);
   state.jobs.set(job.id, { ...(known || {}), ...job });
   scheduleRender();
-  if (!known || known.state !== job.state) refreshJob(job.id);
+  if (!known || known.state !== job.state || known.retryable !== job.retryable) refreshJob(job.id);
 }
 async function refreshJob(id) {
   try {
@@ -1094,7 +1094,7 @@ function renderJob(job, openDetails) {
     <div class="job-head"><div class="grow"><h3>${esc(job.name)}</h3><div class="small faint">${esc(job.kind || "")}${job.created_at ? ` · ${when(job.created_at)}` : ""}</div></div>
       <div class="row"><span class="pill ${kind}">${running ? icon("loader", "spin") : ""}${label}</span>
         ${running ? `<button class="btn sm" data-cancel="${job.id}">${icon("stop")}Cancel</button>` : ""}
-        ${!running && c.failed && job.taskIds ? `<button class="btn sm" data-retry="${job.id}">${icon("refresh")}Retry ${c.failed} failed</button>` : ""}</div></div>
+        ${!running && job.retryable && job.taskIds ? `<button class="btn sm" data-retry="${job.id}">${icon("refresh")}Retry ${job.retryable} failed</button>` : ""}</div></div>
     ${job.error ? `<p class="small error-text" style="margin-top:var(--s-2)">${esc(job.error)}</p>` : ""}
     ${(job.warnings || []).map((w) => `<p class="small" style="color:var(--warn);margin-top:var(--s-2)">${esc(w)}</p>`).join("")}
     ${job.total ? `<div class="bar ${c.failed ? "warn" : ""}" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(job.name)} progress"><i style="width:${pct}%"></i></div>
@@ -1107,7 +1107,7 @@ function renderTask(t) {
   const [kind, ic, label] = STATUS[t.status] || ["", "info", t.status];
   const busy = ["matching", "downloading", "converting", "tagging", "resolving"].includes(t.status);
   const job = state.jobs.get(t.job_id);
-  const canFix = t.status === "failed" && job && !ACTIVE.includes(job.state);
+  const canFix = t.status === "failed" && !t.retried && job && !ACTIVE.includes(job.state);
   const fixBtn = canFix ? `<button class="btn sm ghost" style="margin-top:var(--s-1)" data-fix="${esc(t.job_id)}" data-task="${esc(t.id)}">${icon("external")}Use a YouTube link</button>` : "";
   const detail = t.status === "failed" ? `<div class="small error-text">${esc(t.error)}</div>${fixBtn}`
     : t.status === "skipped" && t.message ? `<div class="xs faint">${esc(t.message)}</div>`

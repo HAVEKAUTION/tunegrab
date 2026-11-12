@@ -160,10 +160,16 @@ class Job(BaseModel):
     finished_at: datetime | None = None
     cancelled: bool = False
     error: str | None = None
+    # ids of failed tasks already handed to a retry job (each failure is retried once)
+    retried: set[str] = Field(default_factory=set)
 
     @property
     def name(self) -> str:
         return self.collection.name if self.collection else self.input
+
+    def retryable(self) -> list[TrackTask]:
+        """Failed tasks that haven't been retried yet."""
+        return [t for t in self.tasks if t.status == TaskStatus.FAILED and t.id not in self.retried]
 
     def counts(self) -> dict[str, int]:
         result = {status.value: 0 for status in TaskStatus}
