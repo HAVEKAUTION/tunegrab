@@ -268,12 +268,15 @@ class JobManager:
         job.finished_at = job.finished_at or job.created_at
         self._publish("job", job_summary(job))
 
-    async def submit(self, request: JobRequest) -> Job:
+    async def submit(self, request: JobRequest, built: Job | None = None) -> Job:
+        """Queue a job; ``built`` is one the caller already resolved (its name is known)."""
         self.loop = asyncio.get_running_loop()
         job = Job(input=request.label.strip(), format=request.format)
+        if built is not None:
+            job.collection, job.tasks = built.collection, built.tasks
         self.jobs[job.id] = job
         self._publish("job", job_summary(job))
-        self._spawn(self._resolve_and_run(job, request))
+        self._spawn(self._resolve_and_run(job, request, built))
         return job
 
     def _build(self, pipeline: Pipeline, request: JobRequest) -> Job:
@@ -334,12 +337,15 @@ class JobManager:
             return self.services.settings
         return self.services.settings.model_copy(update={"format": fmt})
 
-    async def _resolve_and_run(self, job: Job, request: JobRequest) -> None:
+    async def _resolve_and_run(
+        self, job: Job, request: JobRequest, built: Job | None = None
+    ) -> None:
         try:
             pipeline = self.services.pipeline(
                 on_event=self._on_event, settings=self._settings_for(request.format)
             )
-            built = await asyncio.to_thread(self._build, pipeline, request)
+            if built is None:
+                built = await asyncio.to_thread(self._build, pipeline, request)
             if not built.tasks:
                 raise LookupError("None of the selected tracks were found.")
         except (KeyError, IndexError) as exc:  # LookupError subclasses that are bugs, not input

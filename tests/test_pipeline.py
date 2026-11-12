@@ -212,6 +212,7 @@ def test_search_query_job(tmp_path: Path) -> None:
     )
     job = asyncio.run(pipeline.run(pipeline.build_job("Some Artist - Some Song")))
     assert job.collection is not None and job.collection.kind == "search"
+    assert job.name == f"{track.title} – {', '.join(track.artists)}"  # what it picked
     assert statuses(job) == [TaskStatus.DONE]
     assert pipeline.matcher.providers[0].calls == 0  # type: ignore[attr-defined]
     pipeline.query_lookup = lambda q: None

@@ -124,7 +124,8 @@ class Pipeline(TaskRunner):
         if found is None:
             raise LookupError(f"No YouTube Music results for {text!r}")
         track, match = found
-        collection = Collection(kind="search", name=text, tracks=[track], source="ytmusic")
+        name = f"{track.title} \u2013 {', '.join(track.artists)}" if track.artists else track.title
+        collection = Collection(kind="search", name=name, tracks=[track], source="ytmusic")
         return Job(
             input=text,
             collection=collection,

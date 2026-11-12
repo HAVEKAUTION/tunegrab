@@ -9,7 +9,7 @@ const fmtTime = (s) => { s = Math.round(s || 0); const h = Math.floor(s / 3600),
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const when = (iso) => { if (!iso) return ""; const d = new Date(iso); return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }); };
 
-class ApiError extends Error {}
+class ApiError extends Error { constructor(message, body = {}) { super(message); this.body = body; } }
 async function api(path, options = {}) {
   let res;
   try { res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options }); }
@@ -17,7 +17,7 @@ async function api(path, options = {}) {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     const detail = Array.isArray(body.detail) ? body.detail.map((d) => d.msg).join("; ") : body.detail;
-    throw new ApiError(detail || `Request failed (${res.status})`);
+    throw new ApiError(detail || `Request failed (${res.status})`, body);
   }
   return body;
 }
@@ -197,14 +197,17 @@ $("#finder").addEventListener("submit", (e) => { e.preventDefault(); browse(); }
 async function downloadNow() {
   const url = $("#url").value.trim();
   if (!url) { setFinderError("Type a link or “artist - title” first."); $("#url").focus(); return; }
-  const btn = $("#now-btn"); btn.disabled = true;
+  const btn = $("#now-btn"); btn.disabled = true; btn.innerHTML = `${icon("loader", "spin")}Finding…`;
   try {
     const job = await api("/api/jobs", { method: "POST", body: JSON.stringify({ url, format: $("#format").value || null }) });
     upsertJob(job);
-    toast(`Downloading “${url}”.`, { action: { label: "View", run: () => showTab("jobs") } });
+    // a typed search is named after the song it picked; a link is named once it's read
+    toast(job.name !== url ? `Downloading “${job.name}”.` : `Downloading “${url}”.`, { action: { label: "View", run: () => showTab("jobs") } });
     $("#url").value = "";
-  } catch (err) { setFinderError(err.message); }
-  finally { btn.disabled = false; }
+  } catch (err) {
+    if (err.body && err.body.browse) { toast(err.message, { kind: "warn" }); browse(err.body.browse); }
+    else setFinderError(err.message);
+  } finally { btn.disabled = false; btn.innerHTML = `${icon("download")}Download now`; }
 }
 $("#now-btn").addEventListener("click", downloadNow);
 

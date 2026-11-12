@@ -338,7 +338,7 @@ def create_app(
         return job_summary(await manager.submit_video(request))
 
     @app.post("/api/jobs", status_code=202)
-    async def create_job(request: JobRequest) -> dict[str, Any]:
+    async def create_job(request: JobRequest) -> Any:
         sources = [
             bool(request.url and request.url.strip()),
             bool(request.ytm_album),
@@ -354,8 +354,34 @@ def create_app(
             # "Download now" on a YouTube (etc.) link: the video's audio, as music
             video = VideoRequest(url=request.url, mode="audio", format=request.format)
             return job_summary(await manager.submit_video(video))
+        if request.url and not request.track_ids and not is_spotify_input(request.url):
+            return await download_search(request.url.strip(), request)
         job = await manager.submit(request)
         return job_summary(job)
+
+    async def download_search(text: str, request: JobRequest) -> Any:
+        """Download now on typed text: the top song, named up front. An artist's name
+        isn't a song, so the page is sent to Browse instead (409 with ``browse``)."""
+        try:
+            artist = await asyncio.to_thread(services.browser.ytmusic.named_artist, text)
+        except SearchError as exc:  # still worth trying the song search
+            log.warning("artist check failed for %r: %s", text, exc)
+            artist = None
+        if artist is not None:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": f"\u201c{artist.name}\u201d is an artist. Pick albums or songs.",
+                    "browse": text,
+                },
+            )
+        try:
+            built = await asyncio.to_thread(services.pipeline().build_job, text)
+        except LookupError as exc:
+            raise HTTPException(
+                404, f"Nothing on YouTube Music matches \u201c{text}\u201d."
+            ) from exc
+        return job_summary(await manager.submit(request, built))
 
     def _browse_error(exc: Exception) -> HTTPException:
         if isinstance(exc, InvalidURLError):

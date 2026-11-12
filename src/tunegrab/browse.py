@@ -112,6 +112,16 @@ def _artist_of(result: dict[str, Any]) -> ArtistHit | None:
     return ArtistHit(id=str(channel), name=str(name))
 
 
+def _named_artist(text: str, results: list[dict[str, Any]]) -> ArtistHit | None:
+    top = results[0] if results else {}
+    if top.get("resultType") != "artist":
+        return None
+    hit = _artist_of(top)
+    if hit is None or fuzz.ratio(_norm(text), _norm(hit.name)) < ARTIST_MATCH:
+        return None
+    return hit
+
+
 def song_match(hit: SongHit) -> Match:
     """A search hit as a ready-made match, so the download skips matching."""
     track = Track(
@@ -282,13 +292,10 @@ class YTMusicCatalog:
     def lookup(self, text: str) -> ArtistOverview | SearchResults:
         """The artist when the text is their name (YouTube Music's top result), otherwise
         the albums and songs that match."""
-        found = self.client.call("search", text, limit=10) or []
-        results = [r for r in found if isinstance(r, dict)]
-        top = results[0] if results else {}
-        if top.get("resultType") == "artist":
-            hit = _artist_of(top)
-            if hit and fuzz.ratio(_norm(text), _norm(hit.name)) >= ARTIST_MATCH:
-                return self.artist(hit.name, channel=hit.id)
+        results = self._everything(text)
+        named = _named_artist(text, results)
+        if named is not None:
+            return self.artist(named.name, channel=named.id)
         suggestion = None
         for result in results:
             hit = _artist_of(result) if result.get("resultType") == "artist" else None
@@ -296,6 +303,14 @@ class YTMusicCatalog:
                 suggestion = hit
                 break
         return self.search(text, suggestion)
+
+    def named_artist(self, text: str) -> ArtistHit | None:
+        """The artist the text names, if that's what YouTube Music puts on top."""
+        return _named_artist(text, self._everything(text))
+
+    def _everything(self, text: str) -> list[dict[str, Any]]:
+        found = self.client.call("search", text, limit=10) or []
+        return [r for r in found if isinstance(r, dict)]
 
     def search(self, text: str, artist: ArtistHit | None = None) -> SearchResults:
         songs: list[SongHit] = []

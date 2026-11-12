@@ -246,3 +246,44 @@ def test_songs_from_search_download_without_matching(
     assert wait_done(client, two["id"])["total"] == 2  # duplicates dropped
     both = client.post("/api/jobs", json={"ytm_songs": songs, "url": "x"})
     assert both.status_code == 400
+
+
+def test_download_now_names_the_song_it_picked(client: TestClient) -> None:
+    created = client.post("/api/jobs", json={"url": "One More Time", "format": "m4a"})
+    assert created.status_code == 202
+    job = created.json()
+    assert job["name"] == "One More Time – Daft Punk" and job["total"] == 1  # known at once
+    done = wait_done(client, job["id"])
+    assert done["counts"]["done"] == 1 and done["tasks"][0]["path"].endswith(".m4a")
+
+
+def test_download_now_on_an_artist_name_opens_browse(
+    client: TestClient, services: FakeServices
+) -> None:
+    reply = client.post("/api/jobs", json={"url": " Daft Punk "})
+    assert reply.status_code == 409
+    assert reply.json() == {
+        "detail": "“Daft Punk” is an artist. Pick albums or songs.",
+        "browse": "Daft Punk",
+    }
+    assert services.downloader.calls == 0 and client.get("/api/jobs").json() == []
+
+
+def test_download_now_with_no_result_is_a_404(
+    client: TestClient, services: FakeServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(services, "lookup_query", lambda text: None)
+    reply = client.post("/api/jobs", json={"url": "zzzz qqqq"})
+    assert reply.status_code == 404 and "zzzz qqqq" in reply.json()["detail"]
+
+
+def test_download_now_tries_the_song_when_the_artist_check_fails(
+    client: TestClient, services: FakeServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tunegrab.matching.base import SearchError
+
+    def broken(text: str) -> None:
+        raise SearchError("YouTube Music search failed: boom")
+
+    monkeypatch.setattr(services.browser.ytmusic, "named_artist", broken)
+    assert client.post("/api/jobs", json={"url": "One More Time"}).status_code == 202
