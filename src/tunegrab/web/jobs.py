@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
+from tunegrab.browse import SongHit, song_match
 from tunegrab.config import (
     AudioFormat,
     Settings,
@@ -81,19 +82,23 @@ class JobRequest(BaseModel):
     * ``ytm_album``: a YouTube Music album browse ID (optionally only ``track_ids``,
       which are video IDs);
     * ``spotify_tracks``: Spotify track IDs, downloaded as one job called ``name``;
-    * ``csv_text``: an Exportify-style CSV, downloaded as a playlist called ``name``.
+    * ``csv_text``: an Exportify-style CSV, downloaded as a playlist called ``name``;
+    * ``ytm_songs``: songs picked from YouTube Music search (their videos are known).
     """
 
     url: str | None = None
     ytm_album: str | None = None
     spotify_tracks: list[str] | None = None
     csv_text: str | None = Field(default=None, max_length=20_000_000)
+    ytm_songs: list[SongHit] | None = Field(default=None, max_length=500)
     track_ids: list[str] | None = None
     name: str | None = None
     format: AudioFormat | None = None
 
     @property
     def label(self) -> str:
+        if self.ytm_songs and not self.name:
+            return self.ytm_songs[0].title if len(self.ytm_songs) == 1 else "Selected songs"
         return self.name or self.url or self.ytm_album or "Selected tracks"
 
 
@@ -281,6 +286,18 @@ class JobManager:
                 if wanted is None or video_id in wanted
             ]
             collection.tracks = [t.track for t in tasks]
+            return Job(input=request.label, collection=collection, tasks=tasks)
+        if request.ytm_songs:
+            picked = [song_match(hit) for hit in {h.id: h for h in request.ytm_songs}.values()]
+            tasks = [
+                TrackTask(track=m.track, position=i, match=m) for i, m in enumerate(picked, start=1)
+            ]
+            collection = Collection(
+                kind="selection",
+                name=request.label,
+                tracks=[t.track for t in tasks],
+                source="ytmusic",
+            )
             return Job(input=request.label, collection=collection, tasks=tasks)
         if request.csv_text:
             collection = collection_from_csv(

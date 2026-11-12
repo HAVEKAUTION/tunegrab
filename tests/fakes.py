@@ -120,6 +120,44 @@ class FakeAudio:
         return [candidate_for(track)]
 
 
+SEARCH_ALBUMS: list[dict[str, Any]] = [
+    {
+        "_terms": "discovery daft punk",
+        "resultType": "album",
+        "title": "Discovery",
+        "type": "Album",
+        "year": "2001",
+        "browseId": "MPREb_disc",
+        "artists": [{"name": "Daft Punk", "id": "UCdaft"}],
+        "thumbnails": [{"url": "https://lh3/disc=w226-h226", "width": 226, "height": 226}],
+    },
+    {"_terms": "discovery daft punk", "resultType": "album", "title": "No ID"},
+]
+SEARCH_SONGS: dict[str, list[dict[str, Any]]] = {
+    "one more time": [
+        {
+            "resultType": "song",
+            "videoId": "FGBhQbmPwH8",
+            "title": "One More Time",
+            "artists": [{"name": "Daft Punk", "id": "UCdaft"}],
+            "album": {"name": "Discovery", "id": "MPREb_disc"},
+            "duration_seconds": 320,
+            "thumbnails": [{"url": "https://lh3/omt=w60-h60", "width": 60, "height": 60}],
+        },
+        {
+            "resultType": "song",
+            "videoId": "cover123456",
+            "title": "One More Time (Cover)",
+            "artists": [{"name": "Somebody"}],
+            "album": None,
+            "isExplicit": True,
+        },
+        {"resultType": "song", "title": "No video"},
+    ],
+    "nothing at all": [],
+}
+
+
 class FakeYTMusicClient:
     """Stands in for ytmusicapi.YTMusic."""
 
@@ -135,13 +173,33 @@ class FakeYTMusicClient:
             }
         ]
 
-    def search(self, query: str, filter: str, limit: int) -> list[dict[str, Any]]:
+    def search(
+        self, query: str, filter: str | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]:
         if filter == "artists":
             return [
                 {"artist": "Someone Else", "browseId": "UCother"},
                 {"artist": "Fake Band", "browseId": "UCfake"},
             ]
+        if filter is None:  # everything, YouTube Music's top result first
+            return self.everything(query)
+        if filter == "albums":
+            return [a for a in SEARCH_ALBUMS if query.lower() in a["_terms"]]
+        if filter == "songs" and query.lower() in SEARCH_SONGS:
+            return SEARCH_SONGS[query.lower()]
         return self.results
+
+    @staticmethod
+    def everything(query: str) -> list[dict[str, Any]]:
+        band = {"resultType": "artist", "artists": [{"name": "Fake Band", "id": "UCfake"}]}
+        daft = {"resultType": "artist", "artists": [{"name": "Daft Punk", "id": "UCdaft"}]}
+        if query.lower() in ("fake band", "daft punk"):
+            return [band if query.lower() == "fake band" else daft]
+        if query.lower() == "one more time":  # a band of that name exists, but isn't on top
+            top = {"resultType": "song", "title": "One More Time", "videoId": "FGBhQbmPwH8"}
+            other = {"resultType": "artist", "artists": [{"name": "One More Time", "id": "UComt"}]}
+            return [top, other, daft]
+        return [{"resultType": "album", "title": "Discovery", "browseId": "MPREb_disc"}, daft]
 
     def get_artist(self, channel: str) -> dict[str, Any]:
         thumbs = [{"url": "https://lh3/a=w60-h60", "width": 60, "height": 60}]

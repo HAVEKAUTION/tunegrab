@@ -57,6 +57,8 @@ just a clip of it, or only its audio.
 <br>
 
 - Type an artist's name or paste any Spotify **artist, album, playlist or track** link.
+- Type anything else, like `Discovery Daft Punk` or `One More Time`, to see matching
+  albums and songs from YouTube Music and tick the ones you want.
 - See an artist's albums and singles as a cover grid, with **All / Albums / Singles & EPs** filters.
 - **Full discography:** Spotify's public page lists only the newest 8 albums and 8 singles,
   so TuneGrab loads the complete list from YouTube Music.
@@ -348,8 +350,8 @@ those too if you want them gone. Your music folder is never touched.
 <br>
 
 Paste the Spotify link into **Get music** and press **Download now** to skip the preview, or
-**Browse** to see and pick the tracks first. For one song you can also type
-`Artist - Title` and press **Download now**.
+**Browse** to see and pick the tracks first. For one song you can also type its title
+(or `Artist - Title`) and press **Browse** to pick it from the results, or **Download now**.
 
 </details>
 

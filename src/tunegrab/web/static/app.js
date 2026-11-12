@@ -173,7 +173,7 @@ function setFinderError(message) {
 
 async function browse(text) {
   text = (text ?? $("#url").value).trim();
-  if (!text) { setFinderError("Paste a Spotify or YouTube link, or type an artist name."); $("#url").focus(); return; }
+  if (!text) { setFinderError("Paste a Spotify or YouTube link, or type an artist, album or song."); $("#url").focus(); return; }
   $("#url").value = text;
   setFinderError("");
   view.loading = true; view.error = false;
@@ -238,11 +238,24 @@ function renderFirstRun() {
   const s = state.system;
   $("#browse").innerHTML = `<div class="card empty">${icon("music")}
     <h3>Start with an artist</h3>
-    <p>Type a name to see their albums and singles, or paste any Spotify link.</p>
+    <p>Type an artist to see their albums and singles, or an album or song to find it. Spotify links work too.</p>
     <div class="examples">${["Daft Punk", "Fleetwood Mac", "Tame Impala"].map((n) => `<button class="chip" data-example="${esc(n)}">${esc(n)}</button>`).join("")}</div>
     ${s ? `<p class="small faint" style="margin-top:var(--s-3)">Music is saved to <span class="mono">${esc(s.paths.library)}</span>
       ${s.default_folder ? ` · <button class="linkish" style="font-size:var(--fs-sm);color:var(--info)" data-goto="settings">Choose another folder</button>` : ""}</p>` : ""}
   </div>`;
+}
+
+async function openArtist(btn) {
+  const d = view.data, hit = d.artist;
+  btn.disabled = true; btn.innerHTML = `${icon("loader", "spin")}Opening ${esc(hit.name)}…`;
+  try {
+    const data = await api(`/api/browse/ytmusic?artist=${encodeURIComponent(hit.name)}&channel=${encodeURIComponent(hit.id)}`);
+    data.input = hit.name; $("#url").value = hit.name;
+    view.data = data; view.filter = "all"; renderBrowse();
+  } catch (err) {
+    btn.disabled = false; btn.innerHTML = `${icon("user")}${esc(hit.name)}`;
+    toast(`Couldn't open ${hit.name}: ${err.message}`, { kind: "bad", timeout: 8000 });
+  }
 }
 
 async function fullDiscography(btn) {
@@ -261,7 +274,8 @@ async function fullDiscography(btn) {
 function renderBrowse() {
   const d = view.data;
   if (!d) return;
-  $("#browse").innerHTML = d.type === "artist" ? artistHtml(d) : d.type === "video" ? videoHtml(d) : collectionHtml(d);
+  $("#browse").innerHTML = d.type === "artist" ? artistHtml(d) : d.type === "video" ? videoHtml(d)
+    : d.type === "search" ? searchHtml(d) : collectionHtml(d);
   if (view.sheetKey && $("#sheet").open) renderSheet();
 }
 
@@ -338,10 +352,45 @@ function artistHtml(d) {
     ${(d.top_tracks || []).length ? topTracksHtml(d) : ""}`;
 }
 
+// plain text that isn't an artist's name: matching albums and songs from YouTube Music
+const songsKey = (d) => `songs:${d.query}`;
+function searchHtml(d) {
+  const q = queue.get(songsKey(d));
+  const picked = new Set(q ? q.trackIds : []);
+  const all = d.songs.length && d.songs.every((s) => picked.has(s.id));
+  const some = d.songs.some((s) => picked.has(s.id));
+  const songs = d.songs.length ? `<div class="card" style="margin-top:var(--s-6)"><h3 style="margin-bottom:var(--s-2)">Songs</h3><table>
+    <thead><tr><th class="c-check"><input type="checkbox" data-song-all ${all ? "checked" : ""} ${!all && some ? "data-mixed" : ""} aria-label="Select all songs"></th>
+      <th>Title</th><th class="c-time">Time</th></tr></thead><tbody>
+    ${d.songs.map((s) => `<tr class="${picked.has(s.id) ? "on" : ""}"><td class="c-check"><input type="checkbox" data-song-pick="${esc(s.id)}" ${picked.has(s.id) ? "checked" : ""} aria-label="Queue ${esc(s.title)}"></td>
+      <td><div class="t-title">${esc(s.title)}${s.explicit ? ` <span class="pill" title="Explicit">E</span>` : ""}</div>
+        <div class="t-sub">${esc([s.artists.join(", "), s.album].filter(Boolean).join(" · "))}</div></td>
+      <td class="c-time tnum">${s.duration_s ? fmtTime(s.duration_s) : ""}</td></tr>`).join("")}
+    </tbody></table></div>` : "";
+  const albums = d.releases.length ? `<h3 style="margin:var(--s-2) 0 var(--s-3)">Albums and singles</h3><div class="grid">${d.releases.map(releaseHtml).join("")}</div>` : "";
+  return `<div class="artist-head"><div class="grow"><div class="xs faint" style="text-transform:uppercase;letter-spacing:.06em">Search</div>
+      <h2>${esc(d.query)}</h2><div class="small muted">${[d.releases.length ? plural(d.releases.length, "album") : "", d.songs.length ? plural(d.songs.length, "song") : ""].filter(Boolean).join(" and ")}
+      <span class="pill" style="margin-left:var(--s-2)">YouTube Music</span></div></div>
+      ${d.artist ? `<button class="btn" data-artist-open title="See every release by ${esc(d.artist.name)}">${icon("user")}${esc(d.artist.name)}</button>` : ""}</div>
+    ${albums}${songs}`;
+}
+function toggleSong(id, on, all = false) {
+  const d = view.data, key = songsKey(d);
+  const q = queue.get(key);
+  let picked = new Set(q ? q.trackIds : []);
+  if (all) picked = on ? new Set(d.songs.map((s) => s.id)) : new Set(); else if (on) picked.add(id); else picked.delete(id);
+  const songs = d.songs.filter((s) => picked.has(s.id));
+  if (!songs.length) queue.delete(key);
+  else queue.set(key, { key, kind: "songs", name: songs.length === 1 ? songs[0].title : `Songs for “${d.query}”`,
+                        artist: [...new Set(songs.flatMap((s) => s.artists))].slice(0, 3).join(", "),
+                        cover: songs[0].cover_url, total: songs.length, trackIds: songs.map((s) => s.id), songs });
+  changed();
+}
+
 function releaseHtml(r) {
   const key = relKey(r), q = queue.get(key);
   const cls = q ? (q.trackIds ? "part" : "on") : "";
-  const sub = [r.year, KIND_LABEL[r.kind]].filter(Boolean).join(" · ");
+  const sub = [r.artist, r.year, KIND_LABEL[r.kind]].filter(Boolean).join(" · ");
   const state = q ? (q.trackIds ? `${q.trackIds.length} songs picked` : "whole release queued") : "not queued";
   return `<article class="rel ${cls}">
     <button class="pick" data-rel="${esc(key)}" aria-pressed="${q ? (q.trackIds ? "mixed" : "true") : "false"}" aria-label="${esc(r.name)}, ${esc(sub)}, ${state}">
@@ -425,7 +474,7 @@ $("#sheet").addEventListener("close", () => { view.sheetKey = null; });
 
 // ---- queue edits
 function releaseEntry(rel, trackIds = null, total = null) {
-  return { key: relKey(rel), kind: rel.source, id: rel.id, name: rel.name, artist: view.data.name,
+  return { key: relKey(rel), kind: rel.source, id: rel.id, name: rel.name, artist: rel.artist || view.data.name,
            cover: rel.cover_url, year: rel.year, total: total ?? rel.total_tracks, trackIds };
 }
 function fillTotal(rel) {
@@ -487,6 +536,7 @@ $("#browse").addEventListener("click", (e) => {
   if (t.dataset.goto) { showTab(t.dataset.goto); return; }
   if (t.dataset.filter) { view.filter = t.dataset.filter; renderBrowse(); $(`[data-filter="${view.filter}"]`)?.focus(); return; }
   if (t.hasAttribute("data-full")) { fullDiscography(t); return; }
+  if (t.hasAttribute("data-artist-open")) { openArtist(t); return; }
   if (t.hasAttribute("data-tick-all") || t.hasAttribute("data-untick-all")) {
     const on = t.hasAttribute("data-tick-all");
     const snapshot = new Map(queue);
@@ -509,6 +559,8 @@ $("#browse").addEventListener("change", (e) => {
   if (t.dataset.ct) toggleCollectionTrack(t.dataset.ct, on);
   else if (t.hasAttribute("data-ct-all")) toggleCollectionTrack(null, on, true);
   else if (t.dataset.top) toggleTop(t.dataset.top, on);
+  else if (t.dataset.songPick) toggleSong(t.dataset.songPick, on);
+  else if (t.hasAttribute("data-song-all")) toggleSong(null, on, true);
 });
 $("#sheet").addEventListener("change", (e) => {
   const t = e.target, on = t.checked;
@@ -533,7 +585,7 @@ function renderQueue() {
   const songs = entries.reduce((n, q) => n + (entryCount(q) || 0), 0);
   const unknown = entries.some((q) => !entryCount(q));
   bar.innerHTML = `<div class="inner"><div class="covers" aria-hidden="true">${entries.slice(0, 5).map((q) => q.cover ? `<img src="${esc(q.cover)}" alt="">` : "<span></span>").join("")}</div>
-    <div class="grow"><div class="t-title">${plural(entries.length, "item")} in the queue</div><div class="small muted tnum">${songs}${unknown ? "+" : ""} songs</div></div>
+    <div class="grow"><div class="t-title">${plural(entries.length, "item")} in the queue</div><div class="small muted tnum">${unknown ? `${songs}+ songs` : plural(songs, "song")}</div></div>
     <button class="btn ghost" data-q-review>${icon("list")}Review</button>
     <button class="btn primary" data-q-go title="Ctrl+Enter">${icon("download")}Download ${plural(entries.length, "item")}</button></div>`;
   if ($("#queue-dialog").open) renderQueueDialog();
@@ -544,7 +596,7 @@ function renderQueueDialog() {
     <div class="d-body qlist" style="max-height:60vh">${entries.length ? entries.map((q) => `<div class="qrow">
       ${q.cover ? `<img src="${esc(q.cover)}" alt="">` : `<span class="ph"></span>`}
       <div class="grow"><div class="t-title">${esc(q.name)}${q.year ? ` <span class="faint small">${esc(q.year)}</span>` : ""}</div>
-        <div class="t-sub">${esc(q.artist || "")} · ${q.kind === "tracks" ? plural(q.trackIds.length, "song") : q.trackIds ? `${q.trackIds.length} of ${q.total || "?"} songs` : q.total ? `all ${q.total} songs` : "whole release"}${q.kind === "ytmusic" ? " · YouTube Music" : ""}</div></div>
+        <div class="t-sub">${esc(q.artist || "")} · ${q.kind === "tracks" || q.kind === "songs" ? plural(q.trackIds.length, "song") : q.trackIds ? `${q.trackIds.length} of ${q.total || "?"} songs` : q.total ? `all ${q.total} songs` : "whole release"}${q.kind === "ytmusic" || q.kind === "songs" ? " · YouTube Music" : ""}</div></div>
       <button class="btn ghost icon" data-q-remove="${esc(q.key)}" aria-label="Remove ${esc(q.name)}" title="Remove">${icon("x")}</button></div>`).join("")
       : `<div class="empty"><p>The queue is empty.</p></div>`}</div>
     <div class="d-foot"><button class="btn ghost danger" data-q-clear ${entries.length ? "" : "disabled"} style="margin-right:auto">Clear queue</button>
@@ -560,6 +612,7 @@ async function downloadQueue() {
     const body = q.kind === "ytmusic" ? { ytm_album: q.id, track_ids: q.trackIds, name: q.name }
       : q.kind === "spotify" ? { url: `spotify:album:${q.id}`, track_ids: q.trackIds }
       : q.kind === "tracks" ? { spotify_tracks: q.trackIds, name: q.name }
+      : q.kind === "songs" ? { ytm_songs: q.songs, name: q.name }
       : { url: q.url, track_ids: q.trackIds };
     try { upsertJob(await api("/api/jobs", { method: "POST", body: JSON.stringify({ ...body, format }) })); queue.delete(q.key); started++; }
     catch (err) { failed.push(`${q.name}: ${err.message}`); }

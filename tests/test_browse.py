@@ -193,3 +193,56 @@ def test_job_request_validation(client: TestClient) -> None:
     ).json()
     job = wait_done(client, created["id"])
     assert job["state"] == "error" and "None of the selected" in job["error"]
+
+
+def test_text_naming_an_artist_opens_the_artist(client: TestClient) -> None:
+    data = client.get("/api/browse", params={"url": "daft punk"}).json()
+    assert data["type"] == "artist" and data["id"] == "UCdaft"
+
+
+def test_album_and_artist_text_lists_the_album(client: TestClient) -> None:
+    data = client.get("/api/browse", params={"url": "Discovery Daft Punk"}).json()
+    assert data["type"] == "search" and data["query"] == "Discovery Daft Punk"
+    [album] = data["releases"]  # the result without a browse ID is dropped
+    assert album["name"] == "Discovery" and album["source"] == "ytmusic"
+    assert album["artist"] == "Daft Punk" and album["year"] == "2001" and album["kind"] == "album"
+    assert data["artist"] == {"id": "UCdaft", "name": "Daft Punk"}  # offered, not opened
+
+
+def test_song_title_lists_songs_even_when_a_band_has_that_name(client: TestClient) -> None:
+    data = client.get("/api/browse", params={"url": "One More Time"}).json()
+    assert data["type"] == "search" and data["releases"] == []
+    first, cover = data["songs"]  # the result without a video ID is dropped
+    assert first["id"] == "FGBhQbmPwH8" and first["artists"] == ["Daft Punk"]
+    assert first["album"] == "Discovery" and first["duration_s"] == 320
+    assert cover["album"] is None and cover["explicit"] and cover["duration_s"] is None
+    assert data["artist"]["name"] == "One More Time"
+
+
+def test_text_matching_nothing_is_a_plain_404(client: TestClient) -> None:
+    reply = client.get("/api/browse", params={"url": "nothing at all"})
+    assert reply.status_code == 404 and "Nothing on YouTube Music matches" in reply.json()["detail"]
+
+
+def test_artist_by_channel_skips_the_name_search() -> None:
+    catalog = YTMusicCatalog(YTMusicClient(FakeYTMusicClient()))
+    assert catalog.artist("Daft Punk", channel="UCdaft").id == "UCdaft"
+    assert catalog.artist("Fake Band").id == "UCfake"
+
+
+def test_songs_from_search_download_without_matching(
+    client: TestClient, services: FakeServices
+) -> None:
+    songs = client.get("/api/browse", params={"url": "One More Time"}).json()["songs"]
+    one = client.post("/api/jobs", json={"ytm_songs": songs[:1]}).json()
+    assert one["name"] == "One More Time"
+    job = wait_done(client, one["id"])
+    assert job["counts"]["done"] == 1
+    [task] = job["tasks"]
+    assert task["title"] == "One More Time" and task["match"]["url"].endswith("FGBhQbmPwH8")
+    assert task["match"]["reason"] == "picked from search" and services.downloader.calls == 1
+    two = client.post("/api/jobs", json={"ytm_songs": songs + songs[:1]}).json()
+    assert two["name"] == "Selected songs"
+    assert wait_done(client, two["id"])["total"] == 2  # duplicates dropped
+    both = client.post("/api/jobs", json={"ytm_songs": songs, "url": "x"})
+    assert both.status_code == 400

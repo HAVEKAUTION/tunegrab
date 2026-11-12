@@ -31,6 +31,7 @@
   <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></symbol>
   <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></symbol>
   <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></symbol>
   <symbol id="i-minus" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
 </svg>
 
@@ -60,9 +61,9 @@
         <div class="page-head"><div><h1 id="get-title">Get music</h1>
           <p class="muted">Find an artist, album or playlist, tick what you want, then download the queue. Paste a YouTube (or other video) link to save the video, a clip of it, or its audio.</p></div></div>
         <form id="finder" class="finder" autocomplete="off" role="search">
-          <label class="search"><span class="sr">Spotify link, video link or artist name</span>
+          <label class="search"><span class="sr">Spotify or YouTube link, or an artist, album or song</span>
             <svg class="i lg"><use href="#i-search"/></svg>
-            <input id="url" class="input" type="text" placeholder="Spotify link, YouTube link or artist name" required></label>
+            <input id="url" class="input" type="text" placeholder="Spotify or YouTube link, or an artist, album or song" required></label>
           <label><span class="sr">Audio format</span>
             <select id="format" class="select" title="Audio format for these downloads">
               <option value="">Default format</option><option value="mp3">MP3</option><option value="m4a">M4A · original audio</option>

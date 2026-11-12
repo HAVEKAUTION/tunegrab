@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from pydantic import BaseModel
 
 from tunegrab import __version__, storage
+from tunegrab.browse import SearchResults
 from tunegrab.config import (
     Settings,
     coerce_setting,
@@ -343,9 +344,12 @@ def create_app(
             bool(request.ytm_album),
             bool(request.spotify_tracks),
             bool(request.csv_text and request.csv_text.strip()),
+            bool(request.ytm_songs),
         ]
         if sum(sources) != 1:
-            raise HTTPException(400, "Give one of url, ytm_album, spotify_tracks or csv_text")
+            raise HTTPException(
+                400, "Give one of url, ytm_album, ytm_songs, spotify_tracks or csv_text"
+            )
         if request.url and is_video_link(request.url) and not request.track_ids:
             # "Download now" on a YouTube (etc.) link: the video's audio, as music
             video = VideoRequest(url=request.url, mode="audio", format=request.format)
@@ -362,7 +366,8 @@ def create_app(
 
     @app.get("/api/browse")
     async def browse(url: str) -> dict[str, Any]:
-        """Artist -> its releases; album/playlist/track -> its tracks; plain text -> artist."""
+        """Artist -> its releases; album/playlist/track -> its tracks; plain text -> the
+        artist it names, or matching albums and songs."""
         text = url.strip()
         if is_video_link(text):
             try:
@@ -381,8 +386,10 @@ def create_app(
             if not is_spotify_input(text):
                 if not text:
                     raise InvalidURLError("Paste a Spotify link or type an artist name")
-                overview = await asyncio.to_thread(services.browser.ytmusic.artist, text)
-                return {"type": "artist", **overview.model_dump(mode="json")}
+                hits = await asyncio.to_thread(services.browser.ytmusic.lookup, text)
+                if isinstance(hits, SearchResults):
+                    return {"type": "search", **hits.model_dump(mode="json")}
+                return {"type": "artist", **hits.model_dump(mode="json")}
             ref = await asyncio.to_thread(services.resolver.parse, text)
             if ref.kind == "artist":
                 overview = await asyncio.to_thread(services.browser.spotify_artist, ref.id)
@@ -393,9 +400,9 @@ def create_app(
         return {"type": "collection", **release_payload(collection)}
 
     @app.get("/api/browse/ytmusic")
-    async def browse_ytmusic(artist: str) -> dict[str, Any]:
+    async def browse_ytmusic(artist: str, channel: str | None = None) -> dict[str, Any]:
         try:
-            overview = await asyncio.to_thread(services.browser.ytmusic.artist, artist)
+            overview = await asyncio.to_thread(services.browser.ytmusic.artist, artist, channel)
         except (MetadataError, SearchError) as exc:
             raise _browse_error(exc) from exc
         return {"type": "artist", **overview.model_dump(mode="json")}
