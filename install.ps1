@@ -5,7 +5,8 @@
 # What it does (read it first - that's the point of a short script):
 #   1. Installs uv, ffmpeg and Deno with winget, if they're missing.
 #   2. Downloads the latest TuneGrab release into %LOCALAPPDATA%\Programs\TuneGrab
-#      (an update keeps the existing Python environment).
+#      An update replaces only TuneGrab's own files: the Python environment, your music
+#      folder, .env and anything else you keep there are left alone.
 #   3. Sets up its Python environment (uv sync), so the first start is quick.
 #   4. Adds TuneGrab to the Start menu and the desktop, then starts it.
 #
@@ -39,15 +40,50 @@ function Refresh-Path {
 
 function Have($command) { [bool](Get-Command $command -ErrorAction SilentlyContinue) }
 
-if ($Uninstall) {
+# The install folder can hold things TuneGrab didn't put there: the music folder
+# (the default "downloads" lives here), a .env with Spotify credentials, anything else.
+# Updates and uninstalls only ever touch the top-level names the installer itself put
+# there, recorded in this manifest.
+$Manifest = ".tunegrab-installed"
+# What releases up to 0.4.1 contained (used when there's no manifest yet).
+$KnownAppItems = @(".env.example", ".gitattributes", ".github", ".gitignore", ".python-version",
+    "CHANGELOG.md", "LICENSE", "README.md", "TuneGrab.bat", "assets", "docs", "install.ps1",
+    "pyproject.toml", "scripts", "src", "tests", "uv.lock")
+
+function Installed-Items {
+    $path = Join-Path $Dir $Manifest
+    if (Test-Path $path) { return @(Get-Content $path | Where-Object { $_ -and $_ -notmatch '[\\/]' }) }
+    return $KnownAppItems
+}
+
+function Stop-TuneGrab {
     Get-CimInstance Win32_Process -Filter "Name = 'tunegrab.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.ExecutablePath -like "$Dir*" } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+
+if ($Uninstall) {
+    Stop-TuneGrab
     Remove-Item $StartMenu, $Desktop -Force -ErrorAction SilentlyContinue
-    if (Test-Path $Dir) { Remove-Item $Dir -Recurse -Force }
+    $left = @()
+    if (Test-Path $Dir) {
+        foreach ($name in @(Installed-Items) + @(".venv", $Manifest)) {
+            $item = Join-Path $Dir $name
+            if (Test-Path -LiteralPath $item) { Remove-Item -LiteralPath $item -Recurse -Force }
+        }
+        $left = @(Get-ChildItem $Dir -Force)
+        if ($left.Count -eq 0) { Remove-Item $Dir -Force }
+    }
     Say "TuneGrab removed from $Dir."
-    Write-Host "    Your music was not touched. Settings and download history are in"
-    Write-Host "    $env:LOCALAPPDATA\tunegrab - delete that folder too if you want them gone."
+    if ($left.Count -gt 0) {
+        Write-Host "    Kept what TuneGrab didn't install there (your music is in 'downloads' unless"
+        Write-Host "    you chose another folder):"
+        $left | ForEach-Object { Write-Host "      $($_.FullName)" }
+    } else {
+        Write-Host "    Your music folder was not touched."
+    }
+    Write-Host "    Settings and download history are in $env:LOCALAPPDATA\tunegrab -"
+    Write-Host "    delete that folder too if you want them gone."
     Write-Host "    uv, ffmpeg and Deno were left installed (winget uninstall to remove them)."
     return
 }
@@ -94,14 +130,31 @@ try {
     $source = Get-ChildItem $tmp -Directory | Select-Object -First 1
 
     # A running TuneGrab locks its files: stop the one in this folder first.
-    Get-CimInstance Win32_Process -Filter "Name = 'tunegrab.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.ExecutablePath -like "$Dir*" } |
-        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Stop-TuneGrab
 
     New-Item -ItemType Directory $Dir -Force | Out-Null
-    # Mirror the release into $Dir, but keep the Python environment (.venv) for speed.
-    robocopy $source.FullName $Dir /MIR /XD .venv /NFL /NDL /NJH /NJS /NP | Out-Null
-    if ($LASTEXITCODE -ge 8) { throw "Copying files to $Dir failed (robocopy $LASTEXITCODE)." }
+    # Replace only what the old release installed and the new one ships. Never mirror the
+    # whole folder: that would delete the music folder and .env (it did up to 0.4.1).
+    $previous = if (Test-Path $Dir) { @(Installed-Items) } else { @() }
+    $items = @(Get-ChildItem $source.FullName -Force)
+    $names = @($items | ForEach-Object { $_.Name })
+    foreach ($old in $previous) {
+        $path = Join-Path $Dir $old
+        if ($names -notcontains $old -and (Test-Path -LiteralPath $path)) {
+            Remove-Item -LiteralPath $path -Recurse -Force  # dropped from the new release
+        }
+    }
+    foreach ($item in $items) {
+        $target = Join-Path $Dir $item.Name
+        if ($item.PSIsContainer) {
+            # /MIR inside one of the release's own folders only (removes stale source files)
+            robocopy $item.FullName $target /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+            if ($LASTEXITCODE -ge 8) { throw "Copying $($item.Name) to $Dir failed (robocopy $LASTEXITCODE)." }
+        } else {
+            Copy-Item -LiteralPath $item.FullName -Destination $target -Force
+        }
+    }
+    Set-Content -Path (Join-Path $Dir $Manifest) -Value $names -Encoding utf8
 } finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }

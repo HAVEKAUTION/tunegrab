@@ -2,6 +2,16 @@
 
 All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
 
+## Unreleased
+
+### Fixed
+- **The Windows installer could delete your music.** Updating (re-running the install line)
+  mirrored the release over the install folder, which deleted the default music folder
+  (`downloads`) and any `.env` kept there; `-Uninstall` deleted them too. The installer now
+  replaces only its own files, records them in `.tunegrab-installed`, and uninstalling leaves
+  everything else in place and lists it. Because the install line always fetches the newest
+  `install.ps1`, this protects existing 0.4.1 installs on their next update.
+
 ## 0.4.1 — 2026-11-13
 
 ### Added
