@@ -205,6 +205,10 @@ def task_payload(job: Job, task: TrackTask) -> dict[str, Any]:
     }
 
 
+MAX_QUEUED_EVENTS = 1000
+RESYNC_EVENT = "event: resync\ndata: {}\n\n"
+
+
 class JobManager:
     """Holds jobs in memory, runs them one at a time (each job is parallel inside)."""
 
@@ -225,8 +229,12 @@ class JobManager:
     def _publish(self, event: str, data: dict[str, Any]) -> None:
         message = f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
         for queue in list(self.subscribers):
-            if queue.qsize() < 1000:
-                queue.put_nowait(message)
+            if queue.qsize() >= MAX_QUEUED_EVENTS:
+                # The page isn't keeping up: drop the backlog and tell it to reload instead.
+                while not queue.empty():
+                    queue.get_nowait()
+                queue.put_nowait(RESYNC_EVENT)
+            queue.put_nowait(message)
 
     def _on_event(self, job: Job, task: TrackTask | None) -> None:
         """Called from pipeline worker threads."""

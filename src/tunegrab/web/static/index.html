@@ -1324,10 +1324,31 @@ function scheduleRender() {
   requestAnimationFrame(() => { renderPending = false; renderJobs(); renderHistory(); });
 }
 function setConn(kind, text) { $("#conn").innerHTML = `<span class="dot ${kind}"></span><span>${text}</span>`; }
+// After a dropped connection (or when the server had to drop events for us) the page may
+// have missed updates: reload jobs, their songs, history and system state from scratch.
+let resyncing = false;
+async function resync() {
+  if (resyncing) return;
+  resyncing = true;
+  try {
+    const jobs = await api("/api/jobs");
+    const live = new Set(jobs.map((j) => j.id));
+    for (const [id, job] of state.jobs) {
+      if (live.has(id)) continue;
+      for (const tid of job.taskIds || []) state.tasks.delete(tid);
+      state.jobs.delete(id); // the server restarted; it's in history now
+    }
+    for (const job of jobs) { upsertJob(job); refreshJob(job.id); }
+    loadSystem(true); loadHistory();
+  } catch (err) { console.warn("resync failed", err.message); }
+  finally { resyncing = false; }
+}
 function connect() {
   const source = new EventSource("/api/events");
-  source.addEventListener("open", () => setConn("ok", "Connected"));
-  source.addEventListener("error", () => setConn("warn", "Reconnecting…"));
+  let lost = false;
+  source.addEventListener("open", () => { setConn("ok", "Connected"); if (lost) { lost = false; resync(); } });
+  source.addEventListener("error", () => { lost = true; setConn("warn", "Reconnecting…"); });
+  source.addEventListener("resync", () => resync());
   source.addEventListener("job", (e) => {
     const job = JSON.parse(e.data), before = state.jobs.get(job.id);
     upsertJob(job);

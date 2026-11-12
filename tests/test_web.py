@@ -119,6 +119,19 @@ def test_retry_all_failures_is_single_shot(client: TestClient, services: FakeSer
     wait_for(client, first.json()["id"], ("finished",))
 
 
+def test_slow_page_gets_a_resync_instead_of_lost_events(client: TestClient) -> None:
+    manager = client.app.state.manager  # type: ignore[attr-defined]
+    queue = manager.subscribe()
+    for n in range(web_app.MAX_QUEUED_EVENTS + 5):
+        manager._publish("task", {"n": n})
+    messages = []
+    while not queue.empty():
+        messages.append(queue.get_nowait())
+    manager.unsubscribe(queue)
+    assert messages[0] == web_app.RESYNC_EVENT
+    assert len(messages) == 6 and '"n": 1004' in messages[-1]
+
+
 def test_events_are_published(client: TestClient) -> None:
     manager = client.app.state.manager  # type: ignore[attr-defined]
     queue = manager.subscribe()
