@@ -169,11 +169,22 @@ class Pipeline:
         executor = ThreadPoolExecutor(
             max_workers=self.settings.threads, thread_name_prefix="tunegrab"
         )
-        futures = [
-            loop.run_in_executor(executor, self._process, job, task, tmp_root) for task in job.tasks
-        ]
+        # A playlist can list the same song twice: download it once, then let the repeats
+        # find it in the archive ("already downloaded") instead of racing the first copy.
+        seen: set[str] = set()
+        first: list[TrackTask] = []
+        repeats: list[TrackTask] = []
+        for task in job.tasks:
+            (repeats if task.track.key in seen else first).append(task)
+            seen.add(task.track.key)
         try:
-            await asyncio.gather(*futures)
+            for batch in (first, repeats):
+                await asyncio.gather(
+                    *(
+                        loop.run_in_executor(executor, self._process, job, task, tmp_root)
+                        for task in batch
+                    )
+                )
         except asyncio.CancelledError:
             self.cancel()
             job.cancelled = True

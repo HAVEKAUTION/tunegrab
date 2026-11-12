@@ -259,3 +259,15 @@ def test_empty_tmp_folder_is_removed(tmp_path: Path) -> None:
     pipeline, _ = make_pipeline(tmp_path, tracks=[make_track(1)])
     run(pipeline, ALBUM)
     assert not (tmp_path / "lib" / TMP_DIR_NAME).exists()
+
+
+def test_duplicate_song_in_a_job_is_downloaded_once(tmp_path: Path) -> None:
+    song = make_track(1)
+    pipeline, _ = make_pipeline(tmp_path, tracks=[song, make_track(2), song], threads=4)
+    job = run(pipeline, ALBUM)
+    downloader = pipeline.downloader
+    assert isinstance(downloader, FakeDownloader) and downloader.calls == 2
+    assert statuses(job) == [TaskStatus.DONE, TaskStatus.DONE, TaskStatus.SKIPPED]
+    assert job.tasks[2].message == "already downloaded"
+    assert job.tasks[2].path == job.tasks[0].path
+    assert len(library_files(tmp_path)) == 2
