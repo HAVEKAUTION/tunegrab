@@ -1,0 +1,23 @@
+name: Live smoke test
+
+# Weekly real-network run (Spotify embed + YouTube + a real download) to catch breakage early.
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: uv sync --locked
+      - run: uv lock --upgrade-package yt-dlp && uv sync  # always test the newest yt-dlp
+      - run: uv run pytest -m live -q

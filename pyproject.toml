@@ -1,0 +1,96 @@
+[project]
+name = "tunegrab"
+version = "0.2.0"
+description = "Personal-use local music downloader: Spotify metadata -> YouTube audio -> tagged files."
+readme = "README.md"
+authors = [
+    { name = "HAVEKAUTION", email = "243785012+HAVEKAUTION@users.noreply.github.com" }
+]
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.162.4",
+    "httpx>=0.28.1",
+    "keyring>=25.7.0",
+    "mutagen>=1.48.1",
+    "platformdirs>=4.14.5",
+    "pydantic>=2.14.3",
+    "pydantic-settings>=2.16.2",
+    "rapidfuzz>=3.14.6",
+    "rich>=15.0.0",
+    "typer>=0.29.0",
+    "uvicorn>=0.30",
+    "yt-dlp[default]>=2026.10.26",
+    "ytmusicapi>=1.12.3",
+]
+
+[project.scripts]
+tunegrab = "tunegrab.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.11.17,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1.post1",
+    "respx>=0.23.1",
+    "ruff>=0.17.4",
+]
+
+# --- pytest -----------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not live'"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "live: hits the real network (Spotify / YouTube); skipped by default, run with -m live",
+]
+
+# --- ruff -------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "UP",       # pyupgrade
+    "B",        # bugbear
+    "SIM",      # simplify
+    "C4",       # comprehensions
+    "PTH",      # prefer pathlib
+    "RUF",      # ruff-specific
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# Typer declares options as call defaults; that's intended.
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
+
+# --- mypy -------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# mutagen's public API is untyped.
+module = ["tunegrab.tagging.tagger"]
+disallow_untyped_calls = false
+
+[[tool.mypy.overrides]]
+# These libraries ship without type hints.
+module = ["yt_dlp.*", "ytmusicapi.*"]
+ignore_missing_imports = true
+
+[tool.ruff.lint.per-file-ignores]
+# test data: long fixture literals, real-world titles with en dashes, fake class state
+"tests/**" = ["E501", "RUF001", "RUF012"]
