@@ -48,7 +48,7 @@ from tunegrab.download.ytdlp import (
     run_ladder,
     source_info,
 )
-from tunegrab.library.paths import sanitize_segment, unique_path
+from tunegrab.library.paths import move_into_place, sanitize_segment
 from tunegrab.models import Collection, Job, TaskStatus, Track, TrackTask
 
 log = logging.getLogger(__name__)
@@ -643,9 +643,7 @@ class VideoPipeline:
             if self.options.is_clip:
                 self._set(job, task, TaskStatus.CONVERTING, "cutting the clip")
                 path = cut_clip(path, self.options, self.cancel_event)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            final = unique_path(target)
-            shutil.move(str(path), final)
+            final = move_into_place(path, target)
         task.source = label
         task.low_quality = low_quality
         task.path = str(final)

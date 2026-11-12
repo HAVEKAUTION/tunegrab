@@ -26,7 +26,7 @@ from tunegrab.config import Settings
 from tunegrab.download.convert import extension
 from tunegrab.download.ytdlp import DownloadCancelled, Downloader, DownloadError, SourceInfo
 from tunegrab.library.archive import Archive
-from tunegrab.library.paths import render_path, template_fields, unique_path
+from tunegrab.library.paths import move_into_place, render_path, template_fields
 from tunegrab.library.playlists import playlist_file, write_m3u8
 from tunegrab.matching.matcher import Matcher
 from tunegrab.metadata.resolver import Resolver
@@ -376,9 +376,7 @@ class Pipeline:
 
             # 6. move into the library
             self._check_cancel()
-            target = unique_path(self.target_path(job, task))
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(audio), str(target))
+            target = move_into_place(audio, self.target_path(job, task))
         if lyrics is not None and lyrics.synced and self.settings.lrc:
             try:
                 write_lrc(target, lyrics.synced)

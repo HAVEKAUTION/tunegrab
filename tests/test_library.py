@@ -212,3 +212,45 @@ def test_render_path_blocks_lookups_and_traversal(tmp_path: Path) -> None:
         render_path("{title.__class__}.{ext}", template_fields(track, "mp3"), tmp_path)
     path = render_path("../../{title}.{ext}", template_fields(track, "mp3"), tmp_path)
     assert tmp_path in path.parents
+
+
+def test_move_into_place_never_overwrites(tmp_path: Path) -> None:
+    import threading
+
+    from tunegrab.library.paths import move_into_place
+
+    target = tmp_path / "Artist" / "Album" / "Intro.mp3"
+    sources = []
+    for i in range(8):
+        src = tmp_path / f"tmp{i}.mp3"
+        src.write_bytes(f"song {i}".encode())
+        sources.append(src)
+    results: list[Path] = []
+    barrier = threading.Barrier(len(sources))
+
+    def finish(src: Path) -> None:
+        barrier.wait()  # all eight "finish downloading" at the same moment
+        results.append(move_into_place(src, target))
+
+    threads = [threading.Thread(target=finish, args=(s,)) for s in sources]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(set(results)) == 8
+    assert sorted(p.read_bytes() for p in results) == sorted(f"song {i}".encode() for i in range(8))
+    assert not any(s.exists() for s in sources)
+
+
+def test_move_into_place_keeps_existing_files_and_cleans_up_on_failure(tmp_path: Path) -> None:
+    from tunegrab.library.paths import move_into_place
+
+    target = tmp_path / "a.mp3"
+    target.write_bytes(b"user's own file")
+    src = tmp_path / "new.mp3"
+    src.write_bytes(b"new")
+    assert move_into_place(src, target) == tmp_path / "a (2).mp3"
+    assert target.read_bytes() == b"user's own file"
+    with pytest.raises(OSError):
+        move_into_place(tmp_path / "missing.mp3", target)
+    assert not (tmp_path / "a (3).mp3").exists()  # the placeholder was removed
