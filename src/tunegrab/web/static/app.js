@@ -724,6 +724,8 @@ function renderTask(t) {
   const job = state.jobs.get(t.job_id);
   const canFix = t.status === "failed" && !t.retried && job && !ACTIVE.includes(job.state);
   const fixBtn = canFix ? `<button class="btn sm ghost" style="margin-top:var(--s-1)" data-fix="${esc(t.job_id)}" data-task="${esc(t.id)}">${icon("external")}Use a YouTube link</button>` : "";
+  const showBtn = (t.status === "done" || t.status === "skipped") && t.path
+    ? `<button class="btn sm ghost" data-show="${esc(t.path)}" aria-label="Show ${esc(t.title)} in folder">${icon("folder")}Show</button>` : "";
   const detail = t.status === "failed" ? `<div class="small error-text">${esc(t.error)}</div>${fixBtn}`
     : t.status === "skipped" && t.message ? `<div class="xs faint">${esc(t.message)}</div>`
     : t.status === "done" && t.source ? `<div class="xs ${t.low_quality ? "warn-text" : "faint"}" title="What YouTube served, before conversion">${t.low_quality ? icon("alert") : ""}Source: ${esc(t.source)}</div>`
@@ -732,7 +734,7 @@ function renderTask(t) {
   return `<tr data-task="${esc(t.id)}"><td class="c-num tnum">${t.position}</td>
     <td><div class="t-title">${esc(t.title)}</div><div class="t-sub">${esc(t.artists.join(", "))}</div>${detail}
       ${t.status === "downloading" ? `<div class="bar thin"><i style="width:${Math.round(t.progress * 100)}%"></i></div>` : ""}</td>
-    <td class="c-end">${match}</td><td class="c-time tnum">${fmtTime(t.duration_s)}</td>
+    <td class="c-end">${match}${showBtn}</td><td class="c-time tnum">${fmtTime(t.duration_s)}</td>
     <td class="c-end"><span class="pill ${kind}">${icon(ic, busy ? "spin" : "")}${label}</span></td></tr>`;
 }
 // "Use a YouTube link" for a song TuneGrab couldn't find (or found wrongly and failed).
@@ -783,6 +785,7 @@ $("#tab-jobs").addEventListener("click", async (e) => {
   if (!b) return;
   if (b.hasAttribute("data-goto-get")) { showTab("get"); $("#url").focus(); return; }
   if (b.dataset.fix) { openFix(b.dataset.fix, b.dataset.task); return; }
+  if (b.dataset.show) { openPath(b.dataset.show); return; }
   if (b.dataset.retry) {
     b.disabled = true;
     try { upsertJob(await api(`/api/jobs/${b.dataset.retry}/retry`, { method: "POST" })); toast("Retrying the failed songs."); }

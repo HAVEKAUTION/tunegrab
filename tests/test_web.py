@@ -326,17 +326,39 @@ def test_settings_rejects_unusable_music_folders(
     assert "output_dir" not in read_config_file()
 
 
-def test_open_only_inside_library(
+def test_open_music_video_or_saved_files_only(
     client: TestClient, services: FakeServices, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     opened: list[Path] = []
     monkeypatch.setattr(web_app, "open_in_file_manager", opened.append)
     assert client.post("/api/open", json={}).status_code == 200  # creates + opens the root
     assert opened == [(tmp_path / "lib").resolve()]
-    assert client.post("/api/open", json={"path": str(tmp_path)}).status_code == 400
-    assert (
-        client.post("/api/open", json={"path": str(tmp_path / "lib" / "x.mp3")}).status_code == 404
-    )
+    elsewhere = tmp_path / "Videos elsewhere"
+    services.settings = services.settings.model_copy(update={"video_dir": elsewhere})
+    assert client.post("/api/open", json={"path": str(elsewhere)}).status_code == 200
+    # a file the archive knows, even outside today's music folder (folder changed since)
+    old = tmp_path / "old library" / "a,b.mp3"
+    old.parent.mkdir()
+    old.write_bytes(b"x")
+    services.archive.record_download(make_track(1), old, "x", "mp3")
+    assert client.post("/api/open", json={"path": str(old)}).status_code == 200
+    assert opened[-1] == old.resolve()
+    refused = client.post("/api/open", json={"path": str(tmp_path)})
+    assert refused.status_code == 400 and "music and video folders" in refused.json()["detail"]
+    missing = client.post("/api/open", json={"path": str(tmp_path / "lib" / "x.mp3")})
+    assert missing.status_code == 404
+
+
+def test_explorer_gets_one_quoted_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from tunegrab.web import desktop
+
+    song = tmp_path / "a,b.mp3"
+    song.write_bytes(b"x")
+    calls: list[Any] = []
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    monkeypatch.setattr(desktop.subprocess, "Popen", calls.append)
+    desktop.open_in_file_manager(song)
+    assert calls == [f'explorer /select,"{song}"']
 
 
 def test_pick_folder(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

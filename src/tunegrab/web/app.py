@@ -536,16 +536,26 @@ def create_app(
 
     @app.post("/api/open")
     def post_open(body: OpenRequest) -> dict[str, Any]:
+        """Show the music folder, the video folder, or a file TuneGrab saved, in the file
+        manager. Anything else is refused: the page must not open arbitrary paths."""
         root = services.settings.resolved_output_dir.resolve()
+        roots = (root, services.settings.resolved_video_dir.resolve())
         target = Path(body.path).resolve() if body.path else root
-        if target != root and root not in target.parents:
-            raise HTTPException(400, "Only files inside the library can be opened")
+        inside = any(target == r or r in target.parents for r in roots)
+        recorded = body.path is not None and (
+            services.archive.path_is_recorded(Path(body.path))
+            or services.archive.path_is_recorded(target)
+        )
+        if not (inside or recorded):
+            raise HTTPException(400, "TuneGrab only opens your music and video folders.")
         if not target.exists():
-            if target == root:
-                root.mkdir(parents=True, exist_ok=True)
-            else:
-                raise HTTPException(404, "File not found")
-        open_in_file_manager(target)
+            if target not in roots:
+                raise HTTPException(404, "That file isn't there any more (moved or deleted?).")
+            target.mkdir(parents=True, exist_ok=True)
+        try:
+            open_in_file_manager(target)
+        except OSError as exc:
+            raise HTTPException(500, f"Couldn't open the file manager: {exc}") from exc
         return {"opened": str(target)}
 
     @app.get("/api/events")

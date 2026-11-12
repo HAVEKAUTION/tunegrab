@@ -15,7 +15,9 @@ def open_in_file_manager(path: Path) -> None:
     """Show ``path`` (a folder, or a file selected in its folder) in Explorer/Finder/etc."""
     if sys.platform == "win32":
         if path.is_file():
-            subprocess.Popen(["explorer", "/select,", str(path)])
+            # One raw command line: with a list, a name containing a comma ("a,b.mp3") is
+            # passed unquoted and Explorer splits it at the comma.
+            subprocess.Popen(f'explorer /select,"{path}"')
         else:
             os.startfile(path)  # type: ignore[attr-defined,unused-ignore]
     elif sys.platform == "darwin":
