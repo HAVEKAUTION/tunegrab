@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.fakes import ALBUM_ID, FakeServices
+from tests.fakes import ALBUM_ID, FakeServices, make_track
 from tunegrab.config import Settings, read_config_file
 from tunegrab.web import app as web_app
 from tunegrab.web import jobs as web_jobs
@@ -194,6 +194,74 @@ def test_uncaught_errors_become_plain_json(services: FakeServices) -> None:
         assert test_client.get("/api/test-offline").json() == {"detail": "Couldn't reach Spotify."}
         assert test_client.get("/api/test-offline").status_code == 502
         assert test_client.get("/api/test-clip").status_code == 400
+
+
+def _formats(services: FakeServices) -> set[str | None]:
+    return {r.format for r in services.archive.all_downloads()}
+
+
+def test_retry_keeps_the_jobs_format(client: TestClient, services: FakeServices) -> None:
+    services.settings = services.settings.model_copy(update={"retries": 0})
+    services.downloader.fail_times = 3
+    created = client.post("/api/jobs", json={"url": ALBUM, "format": "opus"}).json()
+    job = wait_for(client, created["id"], ("finished",))
+    assert {f.format for f in services.archive.open_failures()} == {"opus"}
+    retried = client.post(f"/api/jobs/{job['id']}/retry").json()
+    assert wait_for(client, retried["id"], ("finished",))["counts"]["done"] == 3
+    assert _formats(services) == {"opus"}  # not the default mp3
+
+
+def test_fix_link_keeps_the_jobs_format(client: TestClient, services: FakeServices) -> None:
+    services.settings = services.settings.model_copy(update={"retries": 0})
+    services.downloader.fail_times = 3
+    created = client.post("/api/jobs", json={"url": ALBUM, "format": "m4a"}).json()
+    job = wait_for(client, created["id"], ("finished",))
+    url = f"/api/jobs/{job['id']}/tasks/{job['tasks'][0]['id']}/fix"
+    fixed = client.post(url, json={"youtube_url": "dQw4w9WgXcQ"}).json()
+    wait_for(client, fixed["id"], ("finished",))
+    assert _formats(services) == {"m4a"}
+
+
+def test_retry_all_after_restart_keeps_each_format(
+    services: FakeServices,
+) -> None:
+    services.settings = services.settings.model_copy(update={"retries": 0})
+    services.downloader.fail_times = 3
+    with TestClient(create_app(services=services), base_url="http://127.0.0.1:8765") as first:
+        created = first.post("/api/jobs", json={"url": ALBUM, "format": "opus"}).json()
+        wait_for(first, created["id"], ("finished",))
+    # a new server (as after a restart) only has the failure records
+    with TestClient(create_app(services=services), base_url="http://127.0.0.1:8765") as second:
+        retried = second.post("/api/failures/retry").json()
+        assert wait_for(second, retried["id"], ("finished",))["counts"]["done"] == 3
+    assert _formats(services) == {"opus"}
+
+
+def test_video_retry_keeps_the_jobs_format(
+    client: TestClient, services: FakeServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = client.app.state.manager  # type: ignore[attr-defined]
+    used: list[str | None] = []
+    original = manager._video_pipeline
+
+    def spy(options: Any, entries: Any, fmt: str | None) -> Any:
+        used.append(fmt)
+        return original(options, entries, fmt)
+
+    monkeypatch.setattr(manager, "_video_pipeline", spy)
+    from tunegrab.models import Job, TaskStatus, TrackTask
+    from tunegrab.video import VideoEntry, VideoOptions
+
+    job = Job(input="https://youtu.be/dQw4w9WgXcQ", format="opus")
+    task = TrackTask(track=make_track(1), position=1, status=TaskStatus.FAILED)
+    job.tasks = [task]
+    job.finished_at = job.created_at
+    entry = VideoEntry("dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ", "Song", "Chan", 213)
+    manager.jobs[job.id] = job
+    manager.video_jobs[job.id] = (VideoOptions(mode="audio"), {task.id: entry})
+    monkeypatch.setattr(manager, "_spawn", lambda coro: coro.close())
+    assert client.post(f"/api/jobs/{job.id}/retry").status_code == 202
+    assert used == ["opus"]
 
 
 def test_events_are_published(client: TestClient) -> None:

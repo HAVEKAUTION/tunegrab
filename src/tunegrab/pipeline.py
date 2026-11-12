@@ -338,6 +338,7 @@ class Pipeline(TaskRunner):
             task.track,
             task.failed_stage,
             task.error or "",
+            self.settings.format,
         )
 
     def _adopt_existing(self, job: Job, task: TrackTask) -> bool:

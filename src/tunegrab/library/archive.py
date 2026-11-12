@@ -21,11 +21,13 @@ from tunegrab.models import Candidate, Collection, Track
 log = logging.getLogger(__name__)
 T = TypeVar("T")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 # Version n -> the statements that upgrade a version n-1 history to n, run in one
 # transaction after a backup copy is made. SCHEMA below is always the newest layout (it
 # creates fresh histories and any table an older one lacks).
-MIGRATIONS: dict[int, tuple[str, ...]] = {}
+MIGRATIONS: dict[int, tuple[str, ...]] = {
+    2: ("ALTER TABLE failures ADD COLUMN format TEXT",),  # retries keep the job's format
+}
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS job_history (
@@ -63,7 +65,8 @@ CREATE TABLE IF NOT EXISTS failures (
     stage TEXT,
     reason TEXT NOT NULL,
     failed_at TEXT NOT NULL,
-    resolved INTEGER NOT NULL DEFAULT 0
+    resolved INTEGER NOT NULL DEFAULT 0,
+    format TEXT
 );
 CREATE INDEX IF NOT EXISTS failures_open ON failures (resolved, key);
 CREATE TABLE IF NOT EXISTS playlists (
@@ -113,6 +116,7 @@ class FailureRecord:
     stage: str | None
     reason: str
     failed_at: str
+    format: str | None = None
 
 
 class SchemaTooNewError(TuneGrabError):
@@ -379,13 +383,14 @@ class Archive:
         track: Track,
         stage: str | None,
         reason: str,
+        fmt: str | None = None,
     ) -> None:
         with self._lock, self._conn:
             self._conn.execute("DELETE FROM failures WHERE key = ? AND resolved = 0", (track.key,))
             self._conn.execute(
                 """INSERT INTO failures (key, job_input, collection_kind, collection_id,
-                     collection_name, position, track_json, stage, reason, failed_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                     collection_name, position, track_json, stage, reason, failed_at, format)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     track.key,
                     job_input,
@@ -397,6 +402,7 @@ class Archive:
                     stage,
                     reason,
                     _now(),
+                    fmt,
                 ),
             )
 
@@ -416,6 +422,7 @@ class Archive:
                 stage=r["stage"],
                 reason=r["reason"],
                 failed_at=r["failed_at"],
+                format=r["format"],
             ),
             "failure",
         )

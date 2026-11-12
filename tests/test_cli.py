@@ -447,3 +447,16 @@ def test_history_from_a_newer_version_is_a_message() -> None:
     result = invoke("status")
     assert result.exit_code == 1 and "newer TuneGrab" in result.output
     assert "Traceback" not in result.output
+
+
+def test_cli_retry_keeps_the_format_of_the_failed_job(services: dict[str, Any]) -> None:
+    track = make_track(1)
+    services["tracks"] = [track]
+    settings = Settings(_env_file=None)
+    with Archive(settings.resolved_archive_path) as archive:
+        archive.record_failure("spotify:album:x", None, 1, track, "downloading", "boom", "opus")
+    result = invoke("retry")
+    assert result.exit_code == 0, result.output
+    with Archive(settings.resolved_archive_path) as archive:
+        record = archive.get_download(track.key)
+        assert record is not None and record.format == "opus"

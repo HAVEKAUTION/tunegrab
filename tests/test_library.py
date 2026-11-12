@@ -287,57 +287,69 @@ def _v1_copy(tmp_path: Path) -> Path:
     return db
 
 
-def test_v1_history_opens_unchanged(tmp_path: Path) -> None:
+def _version(db: Path) -> int:
+    conn = sqlite3.connect(db)
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        return int(row[0])
+    finally:
+        conn.close()
+
+
+def test_v1_history_is_upgraded_with_a_backup(tmp_path: Path) -> None:
     db = _v1_copy(tmp_path)
     with Archive(db) as archive:
-        assert archive.get_meta("schema_version") == archive_module.SCHEMA_VERSION
+        assert archive.get_meta("schema_version") == archive_module.SCHEMA_VERSION == 2
         [record] = archive.all_downloads()
         assert record.video_id == "aaaaaaaaaaa" and record.track.title == "Song 1"
-    assert not list(tmp_path.glob("*.bak-v*"))  # nothing to migrate, no backup
+        columns = [r["name"] for r in archive._execute("PRAGMA table_info(failures)")]
+        assert "format" in columns
+    backup = tmp_path / "tunegrab.db.bak-v1"
+    assert _version(backup) == 1  # the untouched 0.4.x history
+    with Archive(db):  # second open: already current, no new backup
+        pass
+    assert sorted(p.name for p in tmp_path.glob("*.bak-v*")) == ["tunegrab.db.bak-v1"]
 
 
-def test_older_history_is_backed_up_then_migrated(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_next_migration_runs_in_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db = _v1_copy(tmp_path)
-    monkeypatch.setattr(archive_module, "SCHEMA_VERSION", 2)
+    nxt = archive_module.SCHEMA_VERSION + 1
+    monkeypatch.setattr(archive_module, "SCHEMA_VERSION", nxt)
     monkeypatch.setattr(
-        archive_module, "MIGRATIONS", {2: ("ALTER TABLE downloads ADD COLUMN note TEXT",)}
+        archive_module,
+        "MIGRATIONS",
+        {**archive_module.MIGRATIONS, nxt: ("ALTER TABLE downloads ADD COLUMN note TEXT",)},
     )
     with Archive(db) as archive:
-        assert archive.get_meta("schema_version") == 2
+        assert archive.get_meta("schema_version") == nxt
         assert len(archive.all_downloads()) == 1
         columns = [r["name"] for r in archive._execute("PRAGMA table_info(downloads)")]
         assert "note" in columns
-    backup = tmp_path / "tunegrab.db.bak-v1"
-    assert backup.exists()
-    old = sqlite3.connect(backup)  # the backup is the untouched v1 history
-    try:
-        assert old.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone() == ("1",)
-        assert old.execute("SELECT count(*) FROM downloads").fetchone() == (1,)
-    finally:
-        old.close()
-    with Archive(db) as again:  # second open: already current, no new work
-        assert again.get_meta("schema_version") == 2
+        failure_columns = [r["name"] for r in archive._execute("PRAGMA table_info(failures)")]
+        assert "format" in failure_columns  # the earlier step ran too
 
 
 def test_failed_migration_leaves_the_history_alone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     db = _v1_copy(tmp_path)
-    monkeypatch.setattr(archive_module, "SCHEMA_VERSION", 2)
+    nxt = archive_module.SCHEMA_VERSION + 1
+    monkeypatch.setattr(archive_module, "SCHEMA_VERSION", nxt)
     monkeypatch.setattr(
         archive_module,
         "MIGRATIONS",
-        {2: ("ALTER TABLE downloads ADD COLUMN note TEXT", "ALTER TABLE nope ADD COLUMN x")},
+        {**archive_module.MIGRATIONS, nxt: ("ALTER TABLE nope ADD COLUMN x",)},
     )
     with pytest.raises(archive_module.MigrationError, match="left as it was"):
         Archive(db)
-    monkeypatch.setattr(archive_module, "SCHEMA_VERSION", 1)
-    with Archive(db) as archive:  # still a readable v1 history, not set aside
-        assert archive.get_meta("schema_version") == 1
-        columns = [r["name"] for r in archive._execute("PRAGMA table_info(downloads)")]
-        assert "note" not in columns and len(archive.all_downloads()) == 1
+    assert _version(db) == 1  # every step rolled back, including the good one
+    conn = sqlite3.connect(db)
+    try:
+        columns = [r[1] for r in conn.execute("PRAGMA table_info(failures)")]
+        assert "format" not in columns
+        assert conn.execute("SELECT count(*) FROM downloads").fetchone() == (1,)
+    finally:
+        conn.close()
     assert not list(tmp_path.glob("*.corrupt-*"))
 
 

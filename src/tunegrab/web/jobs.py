@@ -20,7 +20,7 @@ from tunegrab.download.ytdlp import DownloadError
 from tunegrab.imports import collection_from_csv
 from tunegrab.matching.base import SearchError
 from tunegrab.metadata.base import MetadataError
-from tunegrab.models import Collection, Job, Match, TaskStatus, TrackTask
+from tunegrab.models import Collection, Job, Match, TaskStatus, Track, TrackTask
 from tunegrab.pipeline import Pipeline
 from tunegrab.preflight import JobAborted
 from tunegrab.runner import unexpected_message as unexpected_error
@@ -263,7 +263,7 @@ class JobManager:
 
     async def submit(self, request: JobRequest) -> Job:
         self.loop = asyncio.get_running_loop()
-        job = Job(input=request.label.strip())
+        job = Job(input=request.label.strip(), format=request.format)
         self.jobs[job.id] = job
         self._publish("job", job_summary(job))
         self._spawn(self._resolve_and_run(job, request))
@@ -310,7 +310,7 @@ class JobManager:
                 job.collection.kind = "selection"
         return job
 
-    def _settings_for(self, fmt: AudioFormat | None) -> Settings:
+    def _settings_for(self, fmt: str | None) -> Settings:
         if fmt is None:
             return self.services.settings
         return self.services.settings.model_copy(update={"format": fmt})
@@ -355,13 +355,13 @@ class JobManager:
         return found
 
     def _video_pipeline(
-        self, options: VideoOptions, entries: dict[str, VideoEntry], fmt: AudioFormat | None
+        self, options: VideoOptions, entries: dict[str, VideoEntry], fmt: str | None
     ) -> VideoPipeline:
         return VideoPipeline(self._settings_for(fmt), options, entries, on_event=self._on_event)
 
     async def submit_video(self, request: VideoRequest) -> Job:
         self.loop = asyncio.get_running_loop()
-        job = Job(input=request.url.strip())
+        job = Job(input=request.url.strip(), format=request.format)
         self.jobs[job.id] = job
         self._publish("job", job_summary(job))
         self._spawn(self._probe_and_run(job, request))
@@ -442,18 +442,31 @@ class JobManager:
         records = self.services.archive.open_failures()
         if not records:
             raise ValueError("No failed tracks to retry.")
-        tracks = list({r.key: r.track for r in records}.values())
-        collection = Collection(kind="selection", name="Retry failed tracks", tracks=tracks)
-        job = Job(
-            input="retry",
-            collection=collection,
-            tasks=[TrackTask(track=t, position=i) for i, t in enumerate(tracks, start=1)],
-        )
+        # one job per format the songs were wanted in (usually just one)
+        by_format: dict[str | None, dict[str, Track]] = {}
+        for record in records:
+            by_format.setdefault(record.format, {})[record.key] = record.track
         self.loop = asyncio.get_running_loop()
-        self.jobs[job.id] = job
-        self._publish("job", job_summary(job))
-        self._spawn(self._run(job, self.services.pipeline(on_event=self._on_event)))
-        return job
+        jobs: list[Job] = []
+        for fmt, found in by_format.items():
+            tracks = list(found.values())
+            name = "Retry failed tracks"
+            if len(by_format) > 1:
+                name += f" ({(fmt or self.services.settings.format).upper()})"
+            job = Job(
+                input="retry",
+                format=fmt,
+                collection=Collection(kind="selection", name=name, tracks=tracks),
+                tasks=[TrackTask(track=t, position=i) for i, t in enumerate(tracks, start=1)],
+            )
+            self.jobs[job.id] = job
+            self._publish("job", job_summary(job))
+            pipeline = self.services.pipeline(
+                on_event=self._on_event, settings=self._settings_for(fmt)
+            )
+            self._spawn(self._run(job, pipeline))
+            jobs.append(job)
+        return jobs[0]
 
     def retry(self, job_id: str, task_ids: set[str] | None = None) -> Job:
         """Re-run the failed tracks of a job (or only ``task_ids`` of them)."""
@@ -472,7 +485,7 @@ class JobManager:
         collection = old.collection
         if collection is not None and video is None:  # video jobs keep "video:<mode>"
             collection = collection.model_copy(update={"source": "retry"})
-        job = Job(input=old.input, collection=collection, tasks=tasks)
+        job = Job(input=old.input, collection=collection, tasks=tasks, format=old.format)
         self.jobs[job.id] = job
         self.loop = asyncio.get_running_loop()
         self._publish("job", job_summary(job))
@@ -481,9 +494,11 @@ class JobManager:
             options, old_entries = video
             entries = {new.id: old_entries[o.id] for new, o in zip(tasks, failed, strict=True)}
             self.video_jobs[job.id] = (options, entries)
-            runner = self._video_pipeline(options, entries, None)
+            runner = self._video_pipeline(options, entries, old.format)
         else:
-            runner = self.services.pipeline(on_event=self._on_event)
+            runner = self.services.pipeline(
+                on_event=self._on_event, settings=self._settings_for(old.format)
+            )
         self._spawn(self._run(job, runner))
         return job
 

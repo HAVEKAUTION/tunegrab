@@ -156,6 +156,8 @@ class Job(BaseModel):
     input: str
     collection: Collection | None = None
     tasks: list[TrackTask] = Field(default_factory=list)
+    # audio format chosen for this job (None: the default in Settings); retries reuse it
+    format: str | None = None
     created_at: datetime = Field(default_factory=_now)
     finished_at: datetime | None = None
     cancelled: bool = False

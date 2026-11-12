@@ -237,6 +237,11 @@ def run_jobs(services: Services, builders: list[tuple[str, Any]]) -> list[Job]:
     with display:
         for job in jobs:
             display.start_job(job)
+            if job.format and job.format != pipeline.settings.format:  # e.g. a retry
+                pipeline = services.pipeline(
+                    on_event=display.on_event,
+                    settings=services.settings.model_copy(update={"format": job.format}),
+                )
             try:
                 run_job_sync(pipeline, job)
             except JobAborted as exc:
@@ -706,11 +711,11 @@ def retry(
         if not failures:
             console.print("No failed tracks to retry.")
             return
-        groups: dict[str, list[Any]] = {}
+        groups: dict[tuple[str, str | None], list[Any]] = {}
         for failure in failures:
-            groups.setdefault(failure.job_input, []).append(failure)
+            groups.setdefault((failure.job_input, failure.format), []).append(failure)
         jobs_in: list[tuple[str, Any]] = []
-        for job_input, items in groups.items():
+        for (job_input, fmt), items in groups.items():
             first = items[0]
             collection = Collection(
                 kind=first.collection_kind or "track",
@@ -721,7 +726,10 @@ def retry(
             )
             tasks = [TrackTask(track=f.track, position=f.position or 0) for f in items]
             jobs_in.append(
-                (collection.name, Job(input=job_input, collection=collection, tasks=tasks))
+                (
+                    collection.name,
+                    Job(input=job_input, collection=collection, tasks=tasks, format=fmt),
+                )
             )
         console.print(f"Retrying {len(failures)} track(s) ...")
         jobs = run_jobs(services, jobs_in)
