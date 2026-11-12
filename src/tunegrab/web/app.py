@@ -449,6 +449,8 @@ def create_app(
         task = next((t for t in job.tasks if t.id == task_id), None)
         if task is None:
             raise HTTPException(404, "No such song in this download")
+        if job_id in manager.video_jobs:
+            raise HTTPException(409, "Videos are downloaded from their own link; press Retry.")
         if task.status != TaskStatus.FAILED:
             raise HTTPException(409, "Only failed songs can be given a link here")
         try:

@@ -293,7 +293,11 @@ def test_failed_video_survives_a_restart_and_shows_in_library(
     base = "http://127.0.0.1:8765"
     with TestClient(create_app(services=services), base_url=base) as first:
         created = first.post("/api/video", json={"url": entry.url}).json()
-        assert wait_for(first, created["id"], ("finished",))["counts"]["failed"] == 1
+        failed = wait_for(first, created["id"], ("finished",))
+        assert failed["counts"]["failed"] == 1 and failed["kind"] == "video"
+        fix = f"/api/jobs/{created['id']}/tasks/{failed['tasks'][0]['id']}/fix"
+        refused = first.post(fix, json={"youtube_url": "dQw4w9WgXcQ"})
+        assert refused.status_code == 409 and "Retry" in refused.json()["detail"]
     with TestClient(create_app(services=services), base_url=base) as second:  # restarted
         assert second.get("/api/system").json()["failures"] == 1
         retried = second.post("/api/failures/retry")

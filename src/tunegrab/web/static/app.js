@@ -722,7 +722,8 @@ function renderTask(t) {
   const [kind, ic, label] = STATUS[t.status] || ["", "info", t.status];
   const busy = ["matching", "downloading", "converting", "tagging", "resolving"].includes(t.status);
   const job = state.jobs.get(t.job_id);
-  const canFix = t.status === "failed" && !t.retried && job && !ACTIVE.includes(job.state);
+  // only songs matched by search can take another link; videos already came from one
+  const canFix = t.status === "failed" && !t.retried && job && job.kind !== "video" && !ACTIVE.includes(job.state);
   const fixBtn = canFix ? `<button class="btn sm ghost" style="margin-top:var(--s-1)" data-fix="${esc(t.job_id)}" data-task="${esc(t.id)}">${icon("external")}Use a YouTube link</button>` : "";
   const showBtn = (t.status === "done" || t.status === "skipped") && t.path
     ? `<button class="btn sm ghost" data-show="${esc(t.path)}" aria-label="Show ${esc(t.title)} in folder">${icon("folder")}Show</button>` : "";
