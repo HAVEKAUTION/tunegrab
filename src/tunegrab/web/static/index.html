@@ -1056,10 +1056,16 @@ function upsertJob(job) {
   scheduleRender();
   if (!known || known.state !== job.state || known.retryable !== job.retryable) refreshJob(job.id);
 }
+// Keep the newest snapshot of each song; an older one can arrive after a newer one.
+function putTask(t) {
+  const known = state.tasks.get(t.id);
+  if (known && known.rev > t.rev) return;
+  state.tasks.set(t.id, t); dirtyTasks.add(t.id);
+}
 async function refreshJob(id) {
   try {
     const full = await api(`/api/jobs/${id}`);
-    for (const t of full.tasks) state.tasks.set(t.id, t);
+    for (const t of full.tasks) putTask(t);
     state.jobs.set(id, { ...state.jobs.get(id), ...full, tasks: undefined, taskIds: full.tasks.map((t) => t.id) });
     scheduleRender();
   } catch (err) {
@@ -1077,31 +1083,89 @@ function renderJobs() {
   const retry = $("#retry-failures");
   retry.hidden = !failures || active > 0;
   $("span", retry).textContent = `Retry ${plural(failures, "failed song")}`;
-  const openDetails = new Set($$("details.tracks[open]").map((d) => d.dataset.job));
-  $("#jobs").innerHTML = jobs.length ? jobs.map((j) => renderJob(j, openDetails)).join("")
-    : (state.history.length ? "" : `<div class="card empty">${icon("download")}<h3>Nothing downloading</h3><p>Queue some music on Get music and it shows up here.</p>
-       <button class="btn" data-goto-get>${icon("search")}Find music</button></div>`);
+  const box = $("#jobs");
+  if (!jobs.length) {
+    jobViews.clear(); dirtyTasks.clear();
+    box.innerHTML = state.history.length ? "" : `<div class="card empty">${icon("download")}<h3>Nothing downloading</h3><p>Queue some music on Get music and it shows up here.</p>
+       <button class="btn" data-goto-get>${icon("search")}Find music</button></div>`;
+    return;
+  }
+  for (const child of [...box.children]) if (!child.dataset.id) child.remove(); // the empty state
+  const keep = new Set(jobs.map((j) => j.id));
+  for (const [id, v] of jobViews) if (!keep.has(id)) { v.el.remove(); jobViews.delete(id); }
+  let prev = null;
+  for (const job of jobs) {
+    const v = jobViews.get(job.id) || createJobView(job);
+    updateJobView(v, job);
+    const want = prev ? prev.nextElementSibling : box.firstElementChild;
+    if (want !== v.el) box.insertBefore(v.el, want);
+    prev = v.el;
+  }
+  dirtyTasks.clear();
 }
-function renderJob(job, openDetails) {
+// The Downloads tab is patched, not rebuilt: a 2,000-song job gets hundreds of updates a
+// second, and rebuilding everything each frame made buttons unclickable and lost focus.
+const jobViews = new Map(); // job id -> the card's elements and what they last showed
+const dirtyTasks = new Set(); // songs that changed since the last frame
+function setHtml(el, html) { if (el._html !== html) { el.innerHTML = html; el._html = html; } }
+function createJobView(job) {
+  const el = document.createElement("div");
+  el.className = "card job"; el.dataset.id = job.id;
+  el.innerHTML = `<div class="job-head"></div><div></div><div></div>
+    <details class="tracks" data-job="${esc(job.id)}" hidden><summary>${icon("chevron")}<span></span></summary><table><tbody></tbody></table></details>`;
+  const [head, notes, progress, details] = el.children;
+  const v = { el, head, notes, progress, details, tbody: $("tbody", details), summary: $("summary span", details),
+    rows: new Map(), open: null, state: null, rowIds: "" };
+  details.addEventListener("toggle", () => {
+    v.open = details.open;
+    if (!details.open) { v.tbody.textContent = ""; v.rows.clear(); v.rowIds = ""; } // closed lists cost nothing
+    else scheduleRender();
+  });
+  jobViews.set(job.id, v);
+  return v;
+}
+function updateJobView(v, job) {
   const c = job.counts || {};
   const finished = (c.done || 0) + (c.skipped || 0) + (c.failed || 0);
   const pct = job.total ? Math.round(100 * finished / job.total) : 0;
-  const tasks = (job.taskIds || []).map((id) => state.tasks.get(id)).filter(Boolean);
   const running = ACTIVE.includes(job.state);
   const [kind, label] = JOB_STATE[job.state] || ["", job.state];
-  const open = openDetails.has(job.id) || (running && tasks.length <= 40);
-  return `<div class="card job" aria-busy="${running}">
-    <div class="job-head"><div class="grow"><h3>${esc(job.name)}</h3><div class="small faint">${esc(job.kind || "")}${job.created_at ? ` · ${when(job.created_at)}` : ""}</div></div>
+  v.el.setAttribute("aria-busy", String(running));
+  setHtml(v.head, `<div class="grow"><h3>${esc(job.name)}</h3><div class="small faint">${esc(job.kind || "")}${job.created_at ? ` · ${when(job.created_at)}` : ""}</div></div>
       <div class="row"><span class="pill ${kind}">${running ? icon("loader", "spin") : ""}${label}</span>
         ${running ? `<button class="btn sm" data-cancel="${job.id}">${icon("stop")}Cancel</button>` : ""}
-        ${!running && job.retryable && job.taskIds ? `<button class="btn sm" data-retry="${job.id}">${icon("refresh")}Retry ${job.retryable} failed</button>` : ""}</div></div>
-    ${job.error ? `<p class="small error-text" style="margin-top:var(--s-2)">${esc(job.error)}</p>` : ""}
-    ${(job.warnings || []).map((w) => `<p class="small" style="color:var(--warn);margin-top:var(--s-2)">${esc(w)}</p>`).join("")}
-    ${job.total ? `<div class="bar ${c.failed ? "warn" : ""}" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(job.name)} progress"><i style="width:${pct}%"></i></div>
-      <div class="job-stats tnum"><span>${finished} of ${job.total}</span><span>${c.done || 0} done</span>${c.skipped ? `<span>${c.skipped} already had</span>` : ""}${c.failed ? `<span class="error-text">${c.failed} failed</span>` : ""}</div>` : ""}
-    ${tasks.length ? `<details class="tracks" data-job="${job.id}" ${open ? "open" : ""}><summary>${icon("chevron")}${plural(tasks.length, "song")}</summary>
-      <table><tbody>${tasks.map(renderTask).join("")}</tbody></table></details>` : ""}
-  </div>`;
+        ${!running && job.retryable && job.taskIds ? `<button class="btn sm" data-retry="${job.id}">${icon("refresh")}Retry ${job.retryable} failed</button>` : ""}</div>`);
+  setHtml(v.notes, `${job.error ? `<p class="small error-text" style="margin-top:var(--s-2)">${esc(job.error)}</p>` : ""}
+    ${(job.warnings || []).map((w) => `<p class="small" style="color:var(--warn);margin-top:var(--s-2)">${esc(w)}</p>`).join("")}`);
+  setHtml(v.progress, job.total ? `<div class="bar ${c.failed ? "warn" : ""}" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(job.name)} progress"><i style="width:${pct}%"></i></div>
+      <div class="job-stats tnum"><span>${finished} of ${job.total}</span><span>${c.done || 0} done</span>${c.skipped ? `<span>${c.skipped} already had</span>` : ""}${c.failed ? `<span class="error-text">${c.failed} failed</span>` : ""}</div>` : "");
+  const ids = job.taskIds || [];
+  v.details.hidden = !ids.length;
+  if (!ids.length) return;
+  v.summary.textContent = plural(ids.length, "song");
+  if (v.open === null) v.open = running && ids.length <= 40; // small running jobs start open
+  if (v.details.open !== v.open) v.details.open = v.open;
+  const stateChanged = v.state !== job.state; // "Use a YouTube link" depends on the job state
+  v.state = job.state;
+  if (!v.open) return;
+  const idKey = ids.join(",");
+  if (idKey !== v.rowIds || stateChanged) { // new or reordered songs: rebuild this list once
+    const html = ids.map((id) => state.tasks.get(id)).filter(Boolean).map(renderTask);
+    v.tbody.innerHTML = html.join("");
+    v.rows.clear();
+    [...v.tbody.children].forEach((tr, i) => { tr._html = html[i]; v.rows.set(tr.dataset.task, tr); });
+    v.rowIds = idKey;
+    return;
+  }
+  for (const id of dirtyTasks) {
+    const tr = v.rows.get(id), t = state.tasks.get(id);
+    if (!tr || !t) continue;
+    const html = renderTask(t);
+    if (tr._html === html) continue;
+    const tpl = document.createElement("template"); tpl.innerHTML = html;
+    const next = tpl.content.firstElementChild; next._html = html;
+    tr.replaceWith(next); v.rows.set(id, next);
+  }
 }
 function renderTask(t) {
   const [kind, ic, label] = STATUS[t.status] || ["", "info", t.status];
@@ -1114,7 +1178,7 @@ function renderTask(t) {
     : t.status === "done" && t.source ? `<div class="xs ${t.low_quality ? "warn-text" : "faint"}" title="What YouTube served, before conversion">${t.low_quality ? icon("alert") : ""}Source: ${esc(t.source)}</div>`
     : busy && t.message ? `<div class="xs faint">${esc(t.message)}</div>` : "";
   const match = t.match ? `<a class="xs" href="${esc(t.match.url)}" target="_blank" rel="noopener" title="${esc(t.match.reason)}">YouTube ${icon("external")} <span class="tnum">match ${t.match.score}</span></a>` : "";
-  return `<tr><td class="c-num tnum">${t.position}</td>
+  return `<tr data-task="${esc(t.id)}"><td class="c-num tnum">${t.position}</td>
     <td><div class="t-title">${esc(t.title)}</div><div class="t-sub">${esc(t.artists.join(", "))}</div>${detail}
       ${t.status === "downloading" ? `<div class="bar thin"><i style="width:${Math.round(t.progress * 100)}%"></i></div>` : ""}</td>
     <td class="c-end">${match}</td><td class="c-time tnum">${fmtTime(t.duration_s)}</td>
@@ -1156,12 +1220,12 @@ async function loadHistory() {
 function renderHistory() {
   const live = new Set(state.jobs.keys());
   const rows = state.history.filter((h) => !live.has(h.id));
-  $("#history").innerHTML = rows.length ? `<div class="card history" style="margin-top:var(--s-4)"><h3 style="margin-bottom:var(--s-2)">Earlier</h3><table><tbody>
+  setHtml($("#history"), rows.length ? `<div class="card history" style="margin-top:var(--s-4)"><h3 style="margin-bottom:var(--s-2)">Earlier</h3><table><tbody>
     ${rows.map((h) => { const c = h.counts || {}; const [kind, label] = JOB_STATE[h.state] || ["", h.state];
       return `<tr><td><div class="t-title">${esc(h.name)}</div><div class="xs faint">${when(h.finished_at || h.created_at)}</div></td>
         <td class="tnum muted">${c.done || 0} done${c.skipped ? ` · ${c.skipped} already had` : ""}${c.failed ? ` · <span class="error-text">${c.failed} failed</span>` : ""}</td>
         <td class="c-end"><span class="pill ${kind}">${label}</span></td></tr>`; }).join("")}
-    </tbody></table></div>` : "";
+    </tbody></table></div>` : "");
 }
 $("#tab-jobs").addEventListener("click", async (e) => {
   const b = e.target.closest("button");
@@ -1360,7 +1424,7 @@ function connect() {
   });
   source.addEventListener("task", (e) => {
     const t = JSON.parse(e.data);
-    state.tasks.set(t.id, t);
+    putTask(t);
     const job = state.jobs.get(t.job_id);
     if (job && job.taskIds && !job.taskIds.includes(t.id)) job.taskIds.push(t.id);
     if (!job || !job.taskIds) refreshJob(t.job_id); else scheduleRender();

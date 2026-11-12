@@ -132,6 +132,13 @@ def test_slow_page_gets_a_resync_instead_of_lost_events(client: TestClient) -> N
     assert len(messages) == 6 and '"n": 1004' in messages[-1]
 
 
+def test_song_snapshots_carry_a_rising_revision(client: TestClient) -> None:
+    created = client.post("/api/jobs", json={"url": ALBUM}).json()
+    first = wait_for(client, created["id"], ("finished",))["tasks"][0]["rev"]
+    second = client.get(f"/api/jobs/{created['id']}").json()["tasks"][0]["rev"]
+    assert second > first
+
+
 def test_events_are_published(client: TestClient) -> None:
     manager = client.app.state.manager  # type: ignore[attr-defined]
     queue = manager.subscribe()

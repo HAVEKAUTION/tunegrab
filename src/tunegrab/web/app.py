@@ -7,6 +7,7 @@ so it must not be exposed to untrusted networks.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import logging
 import os
@@ -174,9 +175,15 @@ def job_state(job: Job) -> str:
     return "queued"
 
 
+# Every song snapshot gets a rising number so the page can drop one that arrives late
+# (a job reload can be answered after a newer live event for the same song).
+_revisions = itertools.count(1)
+
+
 def task_payload(job: Job, task: TrackTask) -> dict[str, Any]:
     match = task.match
     return {
+        "rev": next(_revisions),
         "job_id": job.id,
         "id": task.id,
         "position": task.position,
