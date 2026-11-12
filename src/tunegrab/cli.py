@@ -30,8 +30,8 @@ from tunegrab.config import (
     VideoQuality,
     coerce_setting,
     config_file,
+    keep_earlier_defaults,
     keyring_set,
-    pin_music_folder,
     read_config_file,
     startup_warnings,
     write_config_file,
@@ -95,7 +95,9 @@ _STATUS_STYLE: dict[Status, tuple[str, str]] = {
 # --- shared options ---------------------------------------------------------------------
 
 FormatOpt = Annotated[AudioFormat | None, typer.Option("--format", "-f", help=FORMAT_HELP)]
-BitrateOpt = Annotated[int | None, typer.Option("--bitrate", "-b", help="kbps (mp3 only).")]
+BitrateOpt = Annotated[
+    int | None, typer.Option("--bitrate", "-b", help="Constant kbps for mp3 (default: VBR V0).")
+]
 OutOpt = Annotated[Path | None, typer.Option("--out", "-o", help="Output (library) folder.")]
 ThreadsOpt = Annotated[int | None, typer.Option("--threads", "-t", help="Parallel downloads.")]
 LyricsOpt = Annotated[bool | None, typer.Option("--lyrics/--no-lyrics", help="Embed lyrics.")]
@@ -140,7 +142,7 @@ def load_settings(**overrides: Any) -> Settings:
         if key in values:
             values[key] = Path(values[key]).expanduser().resolve()
     try:
-        settings = pin_music_folder(Settings(**values))
+        settings = keep_earlier_defaults(Settings(**values))
         validate_template(settings.track_template)
         validate_template(settings.playlist_template)
     except TemplateError as exc:

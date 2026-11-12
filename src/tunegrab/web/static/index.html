@@ -66,8 +66,8 @@
             <input id="url" class="input" type="text" placeholder="Spotify or YouTube link, or an artist, album or song" required></label>
           <label><span class="sr">Audio format</span>
             <select id="format" class="select" title="Audio format for these downloads">
-              <option value="">Default format</option><option value="mp3">MP3</option><option value="m4a">M4A · original audio</option>
-              <option value="opus">Opus · original audio</option><option value="flac">FLAC</option></select></label>
+              <option value="">Default format</option><option value="m4a">M4A · original quality</option>
+              <option value="opus">Opus · original quality</option><option value="mp3">MP3 · re-encoded</option><option value="flac">FLAC · re-encoded</option></select></label>
           <button class="btn primary" type="submit" id="browse-btn"><svg class="i"><use href="#i-search"/></svg>Browse</button>
           <button class="btn" type="button" id="now-btn" title="Download the whole link straight away, or the top song for what you typed"><svg class="i"><use href="#i-download"/></svg>Download now</button>
         </form>
@@ -110,9 +110,12 @@
           <div class="card"><h3>Audio</h3><p class="muted small">YouTube audio is lossy. M4A and Opus keep the original stream; MP3 and FLAC re-encode it without adding quality.</p>
             <div class="form-grid">
               <label class="field"><span class="label">Format</span><select id="s-format" class="select">
-                <option value="mp3">MP3</option><option value="m4a">M4A · original audio</option><option value="opus">Opus · original audio</option><option value="flac">FLAC</option></select></label>
-              <label class="field"><span class="label">MP3 bitrate</span><select id="s-bitrate" class="select">
-                <option value="128">128 kbps</option><option value="192">192 kbps</option><option value="256">256 kbps</option><option value="320">320 kbps</option></select></label>
+                <option value="m4a">M4A · original quality</option><option value="opus">Opus · original quality, smallest</option>
+                <option value="mp3">MP3 · re-encoded, for old players</option><option value="flac">FLAC · re-encoded, bigger, no better</option></select></label>
+              <label class="field"><span class="label">MP3 quality</span><select id="s-bitrate" class="select">
+                <option value="">Automatic · VBR V0 (about 245 kbps)</option><option value="128">128 kbps constant</option><option value="192">192 kbps constant</option>
+                <option value="256">256 kbps constant</option><option value="320">320 kbps constant</option></select>
+                <span class="help">V0 sounds the same as 320 for YouTube's 128–160 kbps audio and makes smaller files.</span></label>
             </div></div>
           <div class="card"><h3>Video</h3><p class="muted small">For YouTube (and other) video links. Videos are saved in a <span class="mono">Videos</span> folder inside your music folder.</p>
             <div class="form-grid">

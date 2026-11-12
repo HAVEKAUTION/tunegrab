@@ -350,7 +350,7 @@ class VideoDownloader:
         self,
         options: VideoOptions,
         audio_format: AudioFormat = "m4a",
-        bitrate: int = 320,
+        bitrate: int | None = None,
         cookies_from_browser: str | None = None,
         ladder: tuple[tuple[str, ...] | None, ...] = CLIENT_LADDER,
     ) -> None:

@@ -155,8 +155,12 @@ class Settings(BaseSettings):
     # None: ~/Music/TuneGrab. A relative path is relative to your home folder (never to
     # wherever TuneGrab happened to be started from).
     output_dir: Path | None = None
-    format: AudioFormat = "mp3"
-    bitrate: int = Field(default=320, ge=32, le=320)  # kbps, mp3 only
+    # M4A keeps YouTube's original AAC stream (no re-encode) and plays everywhere modern.
+    # Profiles from before 0.5 keep MP3 (pinned once by pin_format).
+    format: AudioFormat = "m4a"
+    # kbps for MP3 (constant bitrate); None: LAME VBR V0, ~245 kbps, as good as 320 for
+    # YouTube's 128-160 kbps sources and smaller
+    bitrate: int | None = Field(default=None, ge=32, le=320)
     track_template: str = DEFAULT_TRACK_TEMPLATE
     playlist_template: str = DEFAULT_PLAYLIST_TEMPLATE
     playlist_mode: PlaylistMode = "m3u"  # m3u: .m3u8 into the library; folder: copies
@@ -261,6 +265,66 @@ def _history_has_downloads(archive: Path) -> bool:
         return False
 
 
+LEGACY_FORMAT: AudioFormat = "mp3"
+# Bumped when a default changes in a way existing users must not notice. Written to the
+# data folder once, so a profile is judged "existing" only the first time a new version runs.
+DEFAULTS_VERSION = 2  # 2: M4A instead of MP3 (0.5)
+DEFAULTS_MARKER = "defaults-version"
+
+
+def _defaults_seen() -> int:
+    try:
+        return int((data_dir() / DEFAULTS_MARKER).read_text(encoding="utf-8").strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def _legacy_folder_used(cwd: Path) -> bool:
+    legacy = cwd / LEGACY_OUTPUT_DIR
+    try:
+        return legacy.is_dir() and any(legacy.iterdir())
+    except OSError:
+        return False
+
+
+def pin_format(settings: Settings) -> Settings:
+    """Keep MP3 for people who used TuneGrab before M4A became the default (C10).
+
+    The first time this version runs, a profile with saved settings, a used ``downloads``
+    folder or a download history gets ``format = "mp3"`` saved (unless it already chose
+    one); a fresh profile keeps the new default. Either way a marker is written to the data
+    folder, so later changes in Settings never flip the format.
+    """
+    if _defaults_seen() >= DEFAULTS_VERSION:
+        return settings
+    try:
+        saved = read_config_file()
+    except (OSError, tomllib.TOMLDecodeError):
+        return settings  # recover_config_file() reports a broken file
+    existing = "format" not in saved and (
+        bool(saved)
+        or _legacy_folder_used(Path.cwd())
+        or _history_has_downloads(settings.resolved_archive_path)
+    )
+    try:
+        if existing:
+            write_config_file({**saved, "format": LEGACY_FORMAT})
+        marker = data_dir() / DEFAULTS_MARKER
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(DEFAULTS_VERSION), encoding="utf-8")
+    except OSError as exc:  # decided again next start, with the same answer
+        log.warning("could not save the format default: %s", exc)
+    if existing and "format" not in settings.model_fields_set:
+        log.info("kept MP3, the format of earlier versions")
+        return settings.model_copy(update={"format": LEGACY_FORMAT})
+    return settings
+
+
+def keep_earlier_defaults(settings: Settings) -> Settings:
+    """Startup: changed defaults (format, music folder) never surprise an existing user."""
+    return pin_music_folder(pin_format(settings))
+
+
 def pin_music_folder(settings: Settings) -> Settings:
     """Keep existing users' music where it is when the default folder changes (C1).
 
@@ -288,11 +352,7 @@ def pin_music_folder(settings: Settings) -> Settings:
     if "output_dir" in settings.model_fields_set:
         return settings  # chosen for this run (environment or a command-line option)
     legacy = cwd / LEGACY_OUTPUT_DIR
-    try:
-        legacy_used = legacy.is_dir() and any(legacy.iterdir())
-    except OSError:
-        legacy_used = False
-    if not (legacy_used or _history_has_downloads(settings.resolved_archive_path)):
+    if not (_legacy_folder_used(cwd) or _history_has_downloads(settings.resolved_archive_path)):
         return settings
     pinned = legacy.resolve()
     write_config_file({**saved, "output_dir": str(pinned)})

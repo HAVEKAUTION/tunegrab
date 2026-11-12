@@ -349,7 +349,7 @@ def test_settings_roundtrip(client: TestClient, services: FakeServices, tmp_path
     assert client.get("/api/library").json()["root"] == str(new_dir)
     # blank resets to default
     client.post("/api/settings", json={"format": ""})
-    assert services.settings.format == "mp3" and "format" not in read_config_file()
+    assert services.settings.format == "m4a" and "format" not in read_config_file()
 
 
 def test_youtube_sign_in_is_off_by_default_and_reaches_yt_dlp(

@@ -311,7 +311,8 @@ def test_fix_validates_input(services: dict[str, Any]) -> None:
     assert invoke("fix", f"spotify:track:{'1' * 22}", "not a video").exit_code == 1
 
 
-def test_config_commands() -> None:
+def test_config_commands(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TUNEGRAB_FORMAT")  # show what the config file says
     assert invoke("config", "set", "threads", "6").exit_code == 0
     assert invoke("config", "set", "format", "opus").exit_code == 0
     assert read_config_file() == {"threads": 6, "format": "opus"}

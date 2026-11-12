@@ -28,8 +28,8 @@ from tunegrab.config import (
     coerce_setting,
     config_file,
     data_dir,
+    keep_earlier_defaults,
     log_dir,
-    pin_music_folder,
     read_config_file,
     startup_warnings,
     write_config_file,
@@ -178,7 +178,7 @@ def create_app(
     allowed_hosts: set[str] | None = None,
 ) -> FastAPI:
     owned = services is None
-    services = services or build_services(settings or pin_music_folder(Settings()))
+    services = services or build_services(settings or keep_earlier_defaults(Settings()))
     manager = JobManager(services)
     updates = UpdateChecker(services.http, data_dir() / "update-check.json")
 

@@ -35,6 +35,8 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.chdir(tmp_path)
     home = tmp_path / "_home"  # Path.home(): the default music folder lives under it
     monkeypatch.setenv("TUNEGRAB_CHECK_UPDATES", "false")  # no real GitHub/PyPI calls
+    # the suite was written for MP3 files; test_config covers the real default (M4A)
+    monkeypatch.setenv("TUNEGRAB_FORMAT", "mp3")
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("HOME", str(home))
     # no YouTube pacing in tests (tests/test_pacing.py covers it with a fake clock)

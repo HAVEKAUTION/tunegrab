@@ -366,8 +366,8 @@ def run_ladder(
 class YtDlpDownloader:
     def __init__(
         self,
-        fmt: AudioFormat = "mp3",
-        bitrate: int = 320,
+        fmt: AudioFormat = "m4a",
+        bitrate: int | None = None,
         cookies_from_browser: str | None = None,
         ladder: tuple[tuple[str, ...] | None, ...] = CLIENT_LADDER,
     ) -> None:

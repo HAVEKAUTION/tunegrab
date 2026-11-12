@@ -7,17 +7,23 @@ from tunegrab.config import (
     Settings,
     coerce_setting,
     config_file,
+    keep_earlier_defaults,
     pin_music_folder,
     read_config_file,
     write_config_file,
 )
 
 
+@pytest.fixture(autouse=True)
+def real_format_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TUNEGRAB_FORMAT")  # conftest sets MP3 for the rest of the suite
+
+
 def test_defaults() -> None:
     s = Settings(_env_file=None)
     assert (s.format, s.bitrate, s.threads, s.playlist_mode, s.lyrics) == (
-        "mp3",
-        320,
+        "m4a",
+        None,
         4,
         "m3u",
         True,
@@ -96,9 +102,9 @@ def test_unreadable_config_file_is_set_aside(
 
     monkeypatch.setenv("TUNEGRAB_CONFIG_DIR", str(tmp_path))
     monkeypatch.setattr(config, "startup_warnings", [])
-    (tmp_path / "config.toml").write_text('format = "m4a\nthreads = = 2\n', encoding="utf-8")
+    (tmp_path / "config.toml").write_text('format = "opus\nthreads = = 2\n', encoding="utf-8")
     settings = Settings(_env_file=None)
-    assert settings.format == "mp3"  # defaults
+    assert settings.format == "m4a"  # defaults
     kept = list(tmp_path.glob("config.toml.broken-*"))
     assert len(kept) == 1 and "threads = = 2" in kept[0].read_text(encoding="utf-8")
     assert not (tmp_path / "config.toml").exists()
@@ -159,3 +165,44 @@ def test_relative_folder_never_depends_on_the_working_directory(
     settings = pin_music_folder(Settings(_env_file=None))
     assert settings.resolved_output_dir == (Path.home() / "Tunes").resolve()
     assert read_config_file() == {}  # an environment choice isn't written anywhere
+
+
+# --- format default (C10) ---------------------------------------------------------------
+def _marker() -> Path:
+    from tunegrab.config import DEFAULTS_MARKER, data_dir
+
+    return data_dir() / DEFAULTS_MARKER
+
+
+def test_fresh_profile_gets_m4a_and_keeps_it() -> None:
+    settings = keep_earlier_defaults(Settings(_env_file=None))
+    assert settings.format == "m4a" and settings.bitrate is None
+    assert "format" not in read_config_file() and _marker().read_text() == "2"
+    write_config_file({"threads": 2})  # later, the user saves something in Settings
+    assert keep_earlier_defaults(Settings(_env_file=None)).format == "m4a"
+
+
+def test_profile_with_saved_settings_keeps_mp3() -> None:
+    write_config_file({"output_dir": "D:/Music", "threads": 6})  # saved by 0.4.x
+    settings = keep_earlier_defaults(Settings(_env_file=None))
+    assert settings.format == "mp3"
+    assert read_config_file() == {"output_dir": "D:/Music", "threads": 6, "format": "mp3"}
+    write_config_file({**read_config_file(), "format": "m4a"})  # they switch later
+    assert keep_earlier_defaults(Settings(_env_file=None)).format == "m4a"
+
+
+def test_profile_with_download_history_keeps_mp3(tmp_path: Path) -> None:
+    from tests.fakes import make_track
+    from tunegrab.library.archive import Archive
+
+    settings = Settings(_env_file=None)
+    with Archive(settings.resolved_archive_path) as archive:
+        archive.record_download(make_track(1), tmp_path / "a.mp3", "x", "mp3")
+    assert keep_earlier_defaults(settings).format == "mp3"
+    assert read_config_file()["format"] == "mp3"
+
+
+def test_a_chosen_format_is_never_changed() -> None:
+    write_config_file({"format": "opus"})
+    assert keep_earlier_defaults(Settings(_env_file=None)).format == "opus"
+    assert read_config_file() == {"format": "opus"} and _marker().exists()

@@ -33,12 +33,12 @@
  ① Resolve   read the track list and details from Spotify (metadata only)
  ② Match     find each song on YouTube Music / YouTube and score the candidates
  ③ Download  fetch the audio with yt-dlp
- ④ Convert   MP3, M4A, Opus or FLAC with ffmpeg
+ ④ Convert   M4A (original audio), Opus, MP3 or FLAC with ffmpeg
  ⑤ Tag       title, artists, album, track no., year, ISRC, cover art, lyrics
  ⑥ Archive   remember it, so it's never downloaded twice
           │
           ▼
- Artist/Album (Year)/01 - Title.mp3
+ Artist/Album (Year)/01 - Title.m4a
 ```
 
 Everything runs on your own computer. Spotify is used **only** for track information; the
@@ -110,7 +110,8 @@ just a clip of it, or only its audio.
 - Title, artists, album, album artist, track and disc number, year, ISRC and genre where available.
 - Embedded **cover art**.
 - **Lyrics** from LRCLIB (free, no account), embedded in the file, plus an optional synced `.lrc` file.
-- Choose **MP3** (128–320 kbps), **M4A**, **Opus** or **FLAC**.
+- **M4A** by default: YouTube's original audio, not re-encoded. Or **Opus**, **MP3**
+  (VBR V0 or 128–320 kbps) or **FLAC**.
 - Windows-safe file names, with your own naming pattern if you want one.
 - Playlists also get an `.m3u8` playlist file (or their own folder).
 
@@ -476,8 +477,8 @@ setting and where its value came from.
 | Setting | Default | Meaning |
 |---|---|---|
 | `output_dir` | `~/Music/TuneGrab` | Music folder (installs from 0.4.x keep their `downloads` folder) |
-| `format` | `mp3` | `mp3`, `m4a`, `opus` or `flac` |
-| `bitrate` | `320` | MP3 quality in kbps |
+| `format` | `m4a` | `m4a`, `opus`, `mp3` or `flac`. Profiles from before 0.5 keep `mp3` |
+| `bitrate` | — (V0) | MP3 only: unset is LAME VBR V0 (about 245 kbps); a number is constant kbps |
 | `threads` | `4` | Songs downloaded at once (1–16) |
 | `lyrics` / `lrc` | on / off | Embed lyrics / also write a synced `.lrc` |
 | `playlist_mode` | `m3u` | `m3u` playlist file, or `folder` per playlist |
@@ -555,9 +556,12 @@ your Spotify login.
 
 <br>
 
-YouTube audio is lossy (typically around 128–160 kbps Opus/AAC). **M4A** and **Opus** keep the
-original stream untouched. **MP3** and **FLAC** re-encode it for compatibility, but can't add
-quality that isn't there.
+YouTube audio is lossy (typically around 128–160 kbps Opus/AAC; 256 kbps with YouTube Premium
+and **Settings → YouTube sign-in**). **M4A** (the default) and **Opus** keep the original
+stream untouched; M4A plays on phones, cars and Windows, Opus makes the smallest files.
+**MP3** and **FLAC** re-encode it for old players, but can't add quality that isn't there.
+MP3 uses VBR V0 unless you pick a bitrate: it sounds the same as 320 kbps for YouTube audio
+and is smaller. If you used TuneGrab before 0.5, it stays on MP3 until you change it.
 
 TuneGrab skips YouTube's volume-levelled "stable volume" copy, retries when YouTube only
 offers a low-quality one, and flags any song that had to settle for it.
