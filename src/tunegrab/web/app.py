@@ -12,6 +12,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -964,12 +965,23 @@ def create_app(
             raise HTTPException(400, str(exc)) from exc
         return settings_payload(services.settings)
 
+    picker_open = threading.Lock()  # Tk allows one dialog at a time; a second one crashes
+
     @app.post("/api/pick-folder")
     async def post_pick_folder() -> dict[str, Any]:
+        if not picker_open.acquire(blocking=False):
+            raise HTTPException(
+                409, "The folder window is already open. It may be behind another window."
+            )
         try:
             chosen = await asyncio.to_thread(pick_folder, services.settings.resolved_output_dir)
         except Exception as exc:  # no display / no tkinter
-            raise HTTPException(501, f"Folder picker unavailable: {exc}") from exc
+            log.warning("folder picker failed: %s", exc)
+            raise HTTPException(
+                501, "The folder window couldn't open here. Type the full folder path instead."
+            ) from exc
+        finally:
+            picker_open.release()
         return {"path": chosen}
 
     @app.post("/api/open")

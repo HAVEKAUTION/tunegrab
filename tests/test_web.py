@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -163,6 +164,33 @@ def test_open_only_inside_library(
 def test_pick_folder(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(web_app, "pick_folder", lambda initial: "D:/Music")
     assert client.post("/api/pick-folder").json() == {"path": "D:/Music"}
+
+
+def test_pick_folder_allows_one_window_at_a_time(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened, release = threading.Event(), threading.Event()
+
+    def slow_picker(initial: Path) -> str:
+        opened.set()
+        release.wait(5)
+        return "D:/Music"
+
+    monkeypatch.setattr(web_app, "pick_folder", slow_picker)
+    first: dict[str, Any] = {}
+    worker = threading.Thread(target=lambda: first.update(r=client.post("/api/pick-folder")))
+    worker.start()
+    assert opened.wait(5)
+    second = client.post("/api/pick-folder")
+    assert second.status_code == 409 and "already open" in second.json()["detail"]
+    release.set()
+    worker.join(5)
+    assert first["r"].json() == {"path": "D:/Music"}
+    # the lock is released afterwards, also when the picker fails
+    monkeypatch.setattr(web_app, "pick_folder", lambda initial: 1 / 0)
+    assert client.post("/api/pick-folder").status_code == 501
+    monkeypatch.setattr(web_app, "pick_folder", lambda initial: None)
+    assert client.post("/api/pick-folder").json() == {"path": None}
 
 
 def test_local_only_guard(services: FakeServices) -> None:
