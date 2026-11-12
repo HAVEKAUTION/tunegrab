@@ -1,9 +1,12 @@
+import shutil
+import sqlite3
 from pathlib import Path
 
 import pytest
 
 from tests.fakes import candidate_for, make_track
 from tunegrab.config import DEFAULT_PLAYLIST_TEMPLATE, DEFAULT_TRACK_TEMPLATE
+from tunegrab.library import archive as archive_module
 from tunegrab.library.archive import Archive
 from tunegrab.library.paths import (
     MAX_PATH_CHARS,
@@ -282,3 +285,79 @@ def test_one_unreadable_row_does_not_break_the_library(tmp_path: Path) -> None:
         )
         assert [r.track.title for r in archive.all_downloads()] == ["Song 2"]
         assert archive.get_download(make_track(1).key) is None
+
+
+# --- schema migrations (B2) ---------------------------------------------------------------
+V1_FIXTURE = Path(__file__).parent / "fixtures" / "archive-v1.db"
+
+
+def _v1_copy(tmp_path: Path) -> Path:
+    db = tmp_path / "tunegrab.db"
+    shutil.copyfile(V1_FIXTURE, db)
+    return db
+
+
+def test_v1_history_opens_unchanged(tmp_path: Path) -> None:
+    db = _v1_copy(tmp_path)
+    with Archive(db) as archive:
+        assert archive.get_meta("schema_version") == archive_module.SCHEMA_VERSION
+        [record] = archive.all_downloads()
+        assert record.video_id == "aaaaaaaaaaa" and record.track.title == "Song 1"
+    assert not list(tmp_path.glob("*.bak-v*"))  # nothing to migrate, no backup
+
+
+def test_older_history_is_backed_up_then_migrated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = _v1_copy(tmp_path)
+    monkeypatch.setattr(archive_module, "SCHEMA_VERSION", 2)
+    monkeypatch.setattr(
+        archive_module, "MIGRATIONS", {2: ("ALTER TABLE downloads ADD COLUMN note TEXT",)}
+    )
+    with Archive(db) as archive:
+        assert archive.get_meta("schema_version") == 2
+        assert len(archive.all_downloads()) == 1
+        columns = [r["name"] for r in archive._execute("PRAGMA table_info(downloads)")]
+        assert "note" in columns
+    backup = tmp_path / "tunegrab.db.bak-v1"
+    assert backup.exists()
+    old = sqlite3.connect(backup)  # the backup is the untouched v1 history
+    try:
+        assert old.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone() == ("1",)
+        assert old.execute("SELECT count(*) FROM downloads").fetchone() == (1,)
+    finally:
+        old.close()
+    with Archive(db) as again:  # second open: already current, no new work
+        assert again.get_meta("schema_version") == 2
+
+
+def test_failed_migration_leaves_the_history_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = _v1_copy(tmp_path)
+    monkeypatch.setattr(archive_module, "SCHEMA_VERSION", 2)
+    monkeypatch.setattr(
+        archive_module,
+        "MIGRATIONS",
+        {2: ("ALTER TABLE downloads ADD COLUMN note TEXT", "ALTER TABLE nope ADD COLUMN x")},
+    )
+    with pytest.raises(archive_module.MigrationError, match="left as it was"):
+        Archive(db)
+    monkeypatch.setattr(archive_module, "SCHEMA_VERSION", 1)
+    with Archive(db) as archive:  # still a readable v1 history, not set aside
+        assert archive.get_meta("schema_version") == 1
+        columns = [r["name"] for r in archive._execute("PRAGMA table_info(downloads)")]
+        assert "note" not in columns and len(archive.all_downloads()) == 1
+    assert not list(tmp_path.glob("*.corrupt-*"))
+
+
+def test_newer_history_is_refused_not_discarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = _v1_copy(tmp_path)
+    with Archive(db) as archive:
+        archive.set_meta("schema_version", 99)
+    before = db.read_bytes()
+    with pytest.raises(archive_module.SchemaTooNewError, match="newer TuneGrab"):
+        Archive(db)
+    assert db.read_bytes() == before and not list(tmp_path.glob("*.corrupt-*"))

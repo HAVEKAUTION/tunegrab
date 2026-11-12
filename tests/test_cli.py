@@ -438,3 +438,12 @@ def test_no_user_facing_message_names_the_cli_or_dotenv() -> None:
         'spotify_api.py: "Set SPOTIFY_CLIENT_ID first (docs/SETUP.md)."',  # `tunegrab login` only
     }
     assert sorted(set(offenders) - allowed) == []
+
+
+def test_history_from_a_newer_version_is_a_message() -> None:
+    settings = Settings(_env_file=None)
+    with Archive(settings.resolved_archive_path) as archive:
+        archive.set_meta("schema_version", 99)
+    result = invoke("status")
+    assert result.exit_code == 1 and "newer TuneGrab" in result.output
+    assert "Traceback" not in result.output

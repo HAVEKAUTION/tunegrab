@@ -38,6 +38,7 @@ from tunegrab.config import (
 from tunegrab.doctor import CheckResult, Status, run_all, update_ytdlp
 from tunegrab.download.convert import FORMAT_HELP
 from tunegrab.download.ytdlp import BREAKAGE_HINT, DownloadError
+from tunegrab.errors import TuneGrabError
 from tunegrab.imports import CsvImportError, collection_from_csv
 from tunegrab.library.archive import DownloadRecord
 from tunegrab.library.paths import TemplateError, move_into_place, validate_template
@@ -145,7 +146,10 @@ def load_settings(**overrides: Any) -> Settings:
 
 @contextmanager
 def services_for(settings: Settings) -> Iterator[Services]:
-    services = build_services(settings)
+    try:
+        services = build_services(settings)
+    except TuneGrabError as exc:  # e.g. a download history from a newer TuneGrab
+        raise _fail(str(exc)) from exc
     try:
         yield services
     finally:
@@ -1016,7 +1020,10 @@ def serve(
             return
         raise _fail(f"Port {port} is already used by another program. Try --port {port + 1}.")
     settings = load_settings()
-    web_app = create_app(settings, allowed_hosts={host.lower()})
+    try:
+        web_app = create_app(settings, allowed_hosts={host.lower()})
+    except TuneGrabError as exc:
+        raise _fail(str(exc)) from exc
     console.print(f"TuneGrab web UI on [bold]{url}[/] (Ctrl+C to stop)")
     if host not in ("127.0.0.1", "localhost", "::1"):
         console.print(

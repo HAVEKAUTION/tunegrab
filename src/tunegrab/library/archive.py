@@ -15,12 +15,17 @@ from typing import Any, TypeVar
 from pydantic import ValidationError
 
 from tunegrab.config import set_aside, startup_warnings
+from tunegrab.errors import TuneGrabError
 from tunegrab.models import Candidate, Collection, Track
 
 log = logging.getLogger(__name__)
 T = TypeVar("T")
 
 SCHEMA_VERSION = 1
+# Version n -> the statements that upgrade a version n-1 history to n, run in one
+# transaction after a backup copy is made. SCHEMA below is always the newest layout (it
+# creates fresh histories and any table an older one lacks).
+MIGRATIONS: dict[int, tuple[str, ...]] = {}
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS job_history (
@@ -110,6 +115,14 @@ class FailureRecord:
     failed_at: str
 
 
+class SchemaTooNewError(TuneGrabError):
+    """The history was written by a newer TuneGrab; opening it here could damage it."""
+
+
+class MigrationError(TuneGrabError):
+    """Upgrading the history failed; it was left as it was (and a backup exists)."""
+
+
 class Archive:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
@@ -133,6 +146,8 @@ class Archive:
                     conn.execute("PRAGMA journal_mode=WAL")
                     if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                         raise sqlite3.DatabaseError("integrity check failed")
+            self._migrate(conn)
+            with conn:
                 conn.executescript(SCHEMA)
                 conn.execute(
                     "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
@@ -142,6 +157,59 @@ class Archive:
             conn.close()
             raise
         return conn
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        """Bring an older history up to SCHEMA_VERSION (backup first, one transaction)."""
+        has_meta = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'"
+        ).fetchone()
+        if not has_meta:
+            return  # a new, empty history
+        row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        try:
+            version = int(json.loads(row[0])) if row else 1
+        except (TypeError, ValueError) as exc:
+            raise sqlite3.DatabaseError(f"bad schema version {row[0]!r}") from exc
+        if version > SCHEMA_VERSION:
+            raise SchemaTooNewError(
+                f"Your download history ({self.path}) was made by a newer TuneGrab "
+                f"(format {version}; this version reads up to {SCHEMA_VERSION}). Update "
+                "TuneGrab to use it; it hasn't been changed."
+            )
+        if version == SCHEMA_VERSION:
+            return
+        backup = self.path.with_name(f"{self.path.name}.bak-v{version}")
+        if not self._memory:
+            target = sqlite3.connect(str(backup))
+            try:
+                conn.backup(target)
+            finally:
+                target.close()
+            log.info("backed up the download history to %s before upgrading it", backup)
+        conn.execute("BEGIN")
+        try:
+            for step in range(version + 1, SCHEMA_VERSION + 1):
+                for statement in MIGRATIONS[step]:
+                    conn.execute(statement)
+            conn.execute(
+                "UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(SCHEMA_VERSION),)
+            )
+            if row is None:
+                conn.execute(
+                    "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+                    (str(SCHEMA_VERSION),),
+                )
+        except sqlite3.Error as exc:
+            conn.rollback()
+            raise MigrationError(
+                f"TuneGrab couldn't upgrade your download history ({exc}). It was left as it "
+                f"was; a copy is at {backup}."
+            ) from exc
+        except BaseException:
+            conn.rollback()
+            raise
+        conn.commit()
+        log.info("download history upgraded from format %s to %s", version, SCHEMA_VERSION)
 
     def _recover(self, exc: sqlite3.DatabaseError) -> sqlite3.Connection:
         """The download history is damaged: keep it aside and start a fresh one."""
