@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="96" height="96">
+  <title>TuneGrab</title>
+  <rect width="32" height="32" rx="8" fill="#22c55e"/>
+  <g transform="translate(4 4)" fill="none" stroke="#052e16" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 3v14"/><path d="M12 3c2.5 1 5 2.5 5 5.5"/><path d="M7 11h10"/>
+    <circle cx="9" cy="18" r="3" fill="#052e16"/>
+  </g>
+</svg>

@@ -1,11 +1,13 @@
 <div align="center">
 
-# 🎵 TuneGrab
+<img src="docs/images/logo.svg" alt="" width="84">
+
+# TuneGrab
 
 **Pick the albums and songs you want from Spotify, and get a tidy, fully tagged music library on your own drive.**
 <br>Plus videos and clips from YouTube and other sites.
 
-![Version](https://img.shields.io/badge/version-0.4.0-22c55e)
+![Version](https://img.shields.io/badge/version-0.4.1-22c55e)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776ab)
 ![Platforms](https://img.shields.io/badge/runs%20on-Windows%20%7C%20macOS%20%7C%20Linux-555)
 ![Local only](https://img.shields.io/badge/runs-100%25%20local-0ea5e9)
@@ -14,7 +16,9 @@
 
 [Features](#-features) · [Videos](#-videos-and-clips) · [Install](#-install) · [Using the app](#%EF%B8%8F-using-the-app) · [Command line](#-command-line) · [Settings](#%EF%B8%8F-settings) · [FAQ](#-faq) · [Troubleshooting](#-troubleshooting)
 
-<img src="docs/images/browse-artist.jpg" alt="Browsing an artist's discography in TuneGrab, with two albums ticked and four items in the download queue" width="900">
+<img src="docs/images/demo.gif" alt="Typing an artist into TuneGrab, ticking two albums into the queue, then pasting a YouTube link to download a clip" width="900">
+
+**Windows:** `irm https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/install.ps1 | iex` · [other ways](#-install)
 
 </div>
 
@@ -192,31 +196,24 @@ and **Deno** (YouTube needs it).
 
 <br>
 
-**1. Install the tools.** Open PowerShell and run:
+Open PowerShell and paste:
 
 ```powershell
-winget install astral-sh.uv Gyan.FFmpeg DenoLand.Deno
+irm https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/install.ps1 | iex
 ```
 
-Close and reopen PowerShell afterwards so the new tools are found.
+It installs uv, ffmpeg and Deno if they're missing (with winget), puts the latest release in
+`%LOCALAPPDATA%\Programs\TuneGrab`, adds TuneGrab to the Start menu and desktop, and opens it.
+Run the same line again to update. [Read the script](install.ps1) first if you like: it's short.
 
-**2. Get TuneGrab.**
+<details>
+<summary>Install by hand instead</summary>
 
-```powershell
-git clone https://github.com/HAVEKAUTION/tunegrab.git
-cd tunegrab
-```
+1. `winget install astral-sh.uv Gyan.FFmpeg DenoLand.Deno`, then reopen PowerShell.
+2. `git clone https://github.com/HAVEKAUTION/tunegrab.git` (or **Code → Download ZIP**).
+3. Double-click **`TuneGrab.bat`**. The first start takes about a minute.
 
-(Or click **Code → Download ZIP** on GitHub and unzip it anywhere.)
-
-**3. Start it.** Double-click **`TuneGrab.bat`**.
-
-The first start takes about a minute while it sets itself up; after that it opens in a couple
-of seconds. Your browser opens on TuneGrab automatically.
-
-**4. (Optional) Desktop shortcut.** Right-click `TuneGrab.bat` → **Show more options → Send to →
-Desktop (create shortcut)**. To start with Windows, put a shortcut in the folder that opens
-when you type `shell:startup` in the Run box (`Win+R`).
+</details>
 
 > Keep the black launcher window open while you use TuneGrab: closing it stops TuneGrab.
 > Opening the launcher again while TuneGrab is running just reopens the page.
@@ -306,15 +303,22 @@ re-syncs everything else by itself on the next start.
 
 <br>
 
-Besides your music, TuneGrab keeps the app folder (about 80 MB) and its settings, history
+Besides your music, TuneGrab keeps the app folder (about 50 MB) and its settings, history
 and logs in `%LOCALAPPDATA%\tunegrab` (a few MB). **Settings → Storage → Free up space**
 (or `tunegrab clean`) clears leftovers and can prune uv's shared package cache. Your music,
 settings and history stay.
 
-**Uninstall:** delete the `tunegrab` folder and `%LOCALAPPDATA%\tunegrab` (on macOS
+**Uninstall** (installed with the one-liner):
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/install.ps1))) -Uninstall
+```
+
+Otherwise delete the `tunegrab` folder. Settings and history live in
+`%LOCALAPPDATA%\tunegrab` (on macOS
 `~/Library/Application Support/tunegrab` and `~/Library/Logs/tunegrab`; on Linux
-`~/.config/tunegrab`, `~/.local/share/tunegrab` and `~/.local/state/tunegrab`). Run
-`uv cache clean` if you don't use uv for anything else. Your music folder is never touched.
+`~/.config/tunegrab`, `~/.local/share/tunegrab` and `~/.local/state/tunegrab`); delete
+those too if you want them gone. Your music folder is never touched.
 
 </details>
 
@@ -743,6 +747,13 @@ uv run python scripts/check_design.py   # UI colour-contrast check
 Changes per version: [`CHANGELOG.md`](CHANGELOG.md).
 
 </details>
+
+---
+
+## 📌 Project status
+
+TuneGrab is a personal project, shared as-is. I fix what breaks for my own use and push those
+fixes here, but I don't take feature requests or offer support. Forks are welcome.
 
 ---
 

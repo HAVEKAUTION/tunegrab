@@ -2,6 +2,17 @@
 
 All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
 
+## 0.4.1 — 2026-11-13
+
+### Added
+- One-line Windows installer (`install.ps1`): installs uv, ffmpeg and Deno if missing, the
+  latest release, Start-menu and desktop shortcuts; re-run to update, `-Uninstall` to remove.
+- New logo (a music note that doubles as a "t"), used in the app, its tab icon and the shortcuts.
+- README: demo GIF, project status.
+
+### Fixed
+- The "Save as" label on the video card sat lower than the other labels.
+
 ## 0.4.0 — 2026-11-13
 
 Videos and clips, more dependable YouTube downloads, and a smaller footprint. Built from a
