@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from tunegrab.errors import TuneGrabError
 from tunegrab.models import Collection, Track
 from tunegrab.urls import SpotifyRef
 
@@ -11,7 +12,7 @@ from tunegrab.urls import SpotifyRef
 CREDENTIALS_HELP = 'see "Spotify developer credentials" in the README'
 
 
-class MetadataError(Exception):
+class MetadataError(TuneGrabError):
     """Metadata could not be fetched from this provider."""
 
 

@@ -9,6 +9,7 @@ import shutil
 from pathlib import Path
 
 from tunegrab.doctor import Status, check_output_dir
+from tunegrab.errors import TuneGrabError
 
 MIN_FREE_BYTES = 200 * 1024 * 1024  # a few albums' worth of headroom
 DISK_FULL = "Your disk is full. Free some space, then press Retry."
@@ -17,7 +18,7 @@ _DISK_FULL_TEXT = re.compile(
 )
 
 
-class JobAborted(Exception):
+class JobAborted(TuneGrabError):
     """The job can't continue; ``str(exc)`` is a sentence for the user."""
 
 

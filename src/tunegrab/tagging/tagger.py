@@ -30,6 +30,7 @@ from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm
 from mutagen.oggopus import OggOpus
 from mutagen.oggvorbis import OggVorbis
 
+from tunegrab.errors import TuneGrabError
 from tunegrab.models import Track
 
 log = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ log = logging.getLogger(__name__)
 SUPPORTED_SUFFIXES = (".mp3", ".m4a", ".opus", ".ogg", ".flac")
 
 
-class TaggingError(Exception):
+class TaggingError(TuneGrabError):
     pass
 
 

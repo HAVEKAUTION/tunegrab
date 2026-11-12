@@ -166,6 +166,37 @@ def test_rate_limit_pause_shows_and_can_be_ended(
     assert client.post(f"/api/jobs/{created['id']}/resume").status_code == 409
 
 
+def test_uncaught_errors_become_plain_json(services: FakeServices) -> None:
+    from tunegrab.net import NetworkError
+    from tunegrab.video import VideoError
+
+    app = create_app(services=services)
+
+    def bug() -> None:
+        raise KeyError("tracks")
+
+    def offline() -> None:
+        raise NetworkError("Couldn't reach Spotify.")
+
+    def bad_clip() -> None:
+        raise VideoError("The clip must end after it starts.")
+
+    app.add_api_route("/api/test-bug", bug)
+    app.add_api_route("/api/test-offline", offline)
+    app.add_api_route("/api/test-clip", bad_clip)
+    with TestClient(
+        app, base_url="http://127.0.0.1:8765", raise_server_exceptions=False
+    ) as test_client:
+        crashed = test_client.get("/api/test-bug")
+        assert crashed.status_code == 500
+        detail = crashed.json()["detail"]
+        assert detail.startswith("Something unexpected went wrong (KeyError")
+        assert "Traceback" not in detail
+        assert test_client.get("/api/test-offline").json() == {"detail": "Couldn't reach Spotify."}
+        assert test_client.get("/api/test-offline").status_code == 502
+        assert test_client.get("/api/test-clip").status_code == 400
+
+
 def test_events_are_published(client: TestClient) -> None:
     manager = client.app.state.manager  # type: ignore[attr-defined]
     queue = manager.subscribe()

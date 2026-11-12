@@ -25,6 +25,7 @@ from typing import Any, Literal, Protocol
 
 from tunegrab.config import AudioFormat
 from tunegrab.download.convert import extension, format_selector, postprocessors
+from tunegrab.errors import TuneGrabError
 
 log = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ def classify_error(message: str) -> ErrorKind:
     return "other"
 
 
-class DownloadError(Exception):
+class DownloadError(TuneGrabError):
     """yt-dlp could not fetch or convert the audio."""
 
     def __init__(self, message: str, kind: ErrorKind | None = None) -> None:

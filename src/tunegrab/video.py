@@ -49,6 +49,7 @@ from tunegrab.download.ytdlp import (
     run_ladder,
     source_info,
 )
+from tunegrab.errors import TuneGrabError
 from tunegrab.library.paths import move_into_place, sanitize_segment
 from tunegrab.models import Collection, Job, TaskStatus, Track, TrackTask
 from tunegrab.pacing import Pacer, youtube_pacer
@@ -66,7 +67,7 @@ FFMPEG_TIMEOUT_S = 3600
 EventCallback = Callable[[Job, TrackTask | None], None]
 
 
-class VideoError(ValueError):
+class VideoError(TuneGrabError):
     """The link can't be used (unsupported site, private, not a video, ...)."""
 
 

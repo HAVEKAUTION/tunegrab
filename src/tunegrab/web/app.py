@@ -39,11 +39,13 @@ from tunegrab.config import (
 )
 from tunegrab.doctor import Status, check_output_dir, run_all, update_ytdlp
 from tunegrab.download.ytdlp import DownloadError
+from tunegrab.errors import TuneGrabError
 from tunegrab.imports import collection_from_csv
 from tunegrab.library.paths import TemplateError, validate_template
 from tunegrab.matching.base import SearchError
 from tunegrab.metadata.base import MetadataError, NotFoundError
 from tunegrab.models import Candidate, Collection, Job, Match, TaskStatus, Track, TrackTask
+from tunegrab.net import NetworkError
 from tunegrab.pipeline import Pipeline
 from tunegrab.preflight import JobAborted
 from tunegrab.services import Services, build_services
@@ -685,6 +687,18 @@ def create_app(
     app = FastAPI(title="TuneGrab", version=__version__, lifespan=lifespan)
     app.state.manager = manager
     hosts = set(LOCAL_HOSTS) | (allowed_hosts or set())
+
+    @app.exception_handler(TuneGrabError)
+    async def expected_error(request: Request, exc: TuneGrabError) -> JSONResponse:
+        """An error an endpoint didn't catch itself but that has a user message."""
+        status = 502 if isinstance(exc, NetworkError) else 400
+        return JSONResponse({"detail": str(exc)}, status_code=status)
+
+    @app.exception_handler(Exception)
+    async def unexpected(request: Request, exc: Exception) -> JSONResponse:
+        """Last resort: log the traceback, show a plain sentence, never a stack trace."""
+        log.error("unhandled error in %s %s", request.method, request.url.path, exc_info=exc)
+        return JSONResponse({"detail": unexpected_error(exc)}, status_code=500)
 
     @app.middleware("http")
     async def local_only(request: Request, call_next: Any) -> Response:
