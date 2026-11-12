@@ -301,9 +301,22 @@ def create_app(
             raise HTTPException(409, str(exc)) from exc
         return job_summary(job)
 
+    def static_file(name: str, media_type: str) -> Response:
+        body = files("tunegrab.web").joinpath(f"static/{name}").read_text(encoding="utf-8")
+        # no-cache: the browser revalidates, so an updated TuneGrab never runs old scripts
+        return Response(body, media_type=media_type, headers={"Cache-Control": "no-cache"})
+
     @app.get("/", response_class=HTMLResponse)
-    def index() -> str:
-        return files("tunegrab.web").joinpath("static/index.html").read_text(encoding="utf-8")
+    def index() -> Response:
+        return static_file("index.html", "text/html; charset=utf-8")
+
+    @app.get("/app.js")
+    def app_js() -> Response:
+        return static_file("app.js", "text/javascript; charset=utf-8")
+
+    @app.get("/app.css")
+    def app_css() -> Response:
+        return static_file("app.css", "text/css; charset=utf-8")
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:

@@ -42,7 +42,13 @@ def wait_for(client: TestClient, job_id: str, states: tuple[str, ...]) -> dict[s
 
 def test_index_and_health(client: TestClient) -> None:
     page = client.get("/")
-    assert page.status_code == 200 and "TuneGrab" in page.text and "EventSource" in page.text
+    assert page.status_code == 200 and "TuneGrab" in page.text
+    assert '<script src="/app.js">' in page.text and 'href="/app.css"' in page.text
+    script, style = client.get("/app.js"), client.get("/app.css")
+    assert script.headers["content-type"].startswith("text/javascript")
+    assert "EventSource" in script.text and ":root" in style.text
+    assert style.headers["content-type"].startswith("text/css")
+    assert page.headers["cache-control"] == "no-cache"
     assert client.get("/api/health").json()["ok"] is True
 
 

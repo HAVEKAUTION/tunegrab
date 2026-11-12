@@ -28,3 +28,8 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy src
       - run: uv run pytest -q
+      - name: Web UI checks (JS syntax, design tokens)
+        if: runner.os == 'Linux' && matrix.python == '3.12'
+        run: |
+          node --check src/tunegrab/web/static/app.js
+          uv run python scripts/check_design.py

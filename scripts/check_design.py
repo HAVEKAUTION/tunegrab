@@ -13,7 +13,7 @@ import re
 import sys
 from pathlib import Path
 
-HTML = Path(__file__).resolve().parents[1] / "src/tunegrab/web/static/index.html"
+STATIC = Path(__file__).resolve().parents[1] / "src/tunegrab/web/static"
 
 # (foreground, background, minimum ratio, where it's used)
 PAIRS = [
@@ -58,10 +58,8 @@ def ratio(a: str, b: str) -> float:
 
 
 def main() -> int:
-    html = HTML.read_text(encoding="utf-8")
-    css = re.search(r"<style>(.*?)</style>", html, re.S)
-    assert css
-    tok = tokens(css.group(1))
+    css = (STATIC / "app.css").read_text(encoding="utf-8")
+    tok = tokens(css)
     failed = 0
     print(f"{'pair':44} ratio  need")
     for fg, bg, need, where in PAIRS:
@@ -70,10 +68,12 @@ def main() -> int:
         failed += not ok
         print(f"{'OK ' if ok else 'BAD'} {fg} on {bg:16} {r:5.2f}  {need:>4}  ({where})")
     # raw colours outside the token block (ignore data: URIs, which can't use variables)
-    body = re.sub(r":root\s*\{.*?\n\}", "", css.group(1), count=1, flags=re.S)
+    body = re.sub(r":root\s*\{.*?\n\}", "", css, count=1, flags=re.S)
     body = re.sub(r'url\("data:[^"]*"\)', "", body)
     raw = re.findall(r"#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)", body)
-    script = "".join(re.findall(r"<script>(.*?)</script>", html, re.S))
+    script = (STATIC / "app.js").read_text(encoding="utf-8")
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    raw += re.findall(r'style="[^"]*(#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\))', html)
     raw += re.findall(r"(?<![\w&])#[0-9a-fA-F]{6}\b", script)
     if raw:
         failed += 1
