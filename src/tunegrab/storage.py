@@ -17,7 +17,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from tunegrab.config import Settings, config_dir, data_dir, log_dir
+from tunegrab.config import Settings, config_dir, log_dir
 
 TMP_DIR_NAME = ".tunegrab-tmp"
 UV_TIMEOUT_S = 600
@@ -258,8 +258,3 @@ def prune_uv_cache() -> CleanResult:
     if proc.returncode != 0:
         return CleanResult("uv_cache", 0, f"uv cache prune failed: {proc.stderr.strip()[-300:]}")
     return CleanResult("uv_cache", max(0, before - size_of(uv_dir)), "pruned unused packages")
-
-
-def app_data_dirs() -> list[Path]:
-    """Every folder TuneGrab itself creates outside the project (for uninstalling)."""
-    return sorted({config_dir(), data_dir(), log_dir()})

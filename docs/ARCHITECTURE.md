@@ -61,7 +61,7 @@ tunegrab/
 │   │   ├── archive.py      # SQLite: downloaded tracks, match cache, failures
 │   │   └── playlists.py    # write .m3u8 files
 │   ├── pipeline.py         # orchestrates a Job: async queue, concurrency, retries
-│   └── web/                # app.py (FastAPI, JobManager, SSE) + static/index.html
+│   └── web/                # app.py (routes, SSE), jobs.py (JobManager), desktop.py; static/ index.html + app.js + app.css
 └── tests/
     ├── fixtures/           # saved JSON responses for mocks
     └── ...

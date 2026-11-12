@@ -138,11 +138,6 @@ def check_js_runtime() -> CheckResult:
     return CheckResult(label, Status.FAIL, detail, JS_RUNTIME_HINT)
 
 
-def check_deno() -> CheckResult:
-    """Kept for callers of the old name."""
-    return check_js_runtime()
-
-
 def check_ytdlp(today: date | None = None) -> CheckResult:
     """yt-dlp must be installed. Its version is its release date: warn when it's old,
     since an outdated yt-dlp is the usual reason YouTube downloads start failing."""

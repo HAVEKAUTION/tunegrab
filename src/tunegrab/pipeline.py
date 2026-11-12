@@ -131,11 +131,6 @@ class Pipeline(TaskRunner):
             tasks=[TrackTask(track=track, position=1, match=match)],
         )
 
-    def job_from_tasks(
-        self, text: str, collection: Collection | None, tasks: list[TrackTask]
-    ) -> Job:
-        return Job(input=text, collection=collection, tasks=tasks)
-
     # --- running ---------------------------------------------------------------------
     def resume(self) -> bool:
         """End a rate-limit pause early (the user pressed Try now). False if not paused."""

@@ -14,7 +14,6 @@ from tunegrab.library.paths import (
     render_path,
     sanitize_segment,
     template_fields,
-    unique_path,
     validate_template,
 )
 from tunegrab.library.playlists import playlist_file, read_m3u8, write_m3u8
@@ -97,15 +96,6 @@ def test_validate_template() -> None:
         validate_template("{nope}.{ext}")
     with pytest.raises(TemplateError, match="ext"):
         validate_template("{title}.mp3")
-
-
-def test_unique_path(tmp_path: Path) -> None:
-    p = tmp_path / "a.mp3"
-    assert unique_path(p) == p
-    p.write_text("x")
-    assert unique_path(p) == tmp_path / "a (2).mp3"
-    (tmp_path / "a (2).mp3").write_text("x")
-    assert unique_path(p) == tmp_path / "a (3).mp3"
 
 
 # --- archive --------------------------------------------------------------------

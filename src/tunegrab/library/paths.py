@@ -200,22 +200,11 @@ def _fit(segments: list[str], ext: str, budget: int) -> list[str]:
         segments[index] = shortened + suffix if index == last else shortened
 
 
-def unique_path(path: Path) -> Path:
-    """``song.mp3`` -> ``song (2).mp3`` (etc.) if the path is taken."""
-    if not path.exists():
-        return path
-    for n in range(2, 1000):
-        candidate = path.with_name(f"{path.stem} ({n}){path.suffix}")
-        if not candidate.exists():
-            return candidate
-    raise FileExistsError(f"Too many files named like {path}")
-
-
 def claim_path(path: Path) -> Path:
     """Atomically reserve ``path`` (or ``path (2)``, ...) by creating an empty file there.
 
-    Unlike :func:`unique_path`, two threads can never get the same name: the file is
-    created with ``O_EXCL``, so the second one moves on to the next free name."""
+    Two threads can never get the same name: the file is created with ``O_EXCL``, so
+    the second one moves on to the next free name."""
     path.parent.mkdir(parents=True, exist_ok=True)
     names = [path] + [path.with_name(f"{path.stem} ({n}){path.suffix}") for n in range(2, 1000)]
     for candidate in names:

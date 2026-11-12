@@ -322,19 +322,6 @@ def create_app(
     def health() -> dict[str, Any]:
         return {"ok": True, "version": __version__, "metadata": services.resolver.provider_names}
 
-    @app.get("/api/preview")
-    async def preview(url: str) -> dict[str, Any]:
-        try:
-            collection = await asyncio.to_thread(services.resolver.resolve, url)
-        except InvalidURLError as exc:
-            raise HTTPException(400, str(exc)) from exc
-        except NotFoundError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        except MetadataError as exc:
-            raise HTTPException(502, str(exc)) from exc
-        data = collection.model_dump(mode="json")
-        return data
-
     @app.post("/api/video", status_code=202)
     async def create_video_job(request: VideoRequest) -> dict[str, Any]:
         """Download a video link (YouTube or any yt-dlp site) as MP4, a clip, or audio."""

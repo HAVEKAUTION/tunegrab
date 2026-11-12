@@ -52,14 +52,6 @@ def test_index_and_health(client: TestClient) -> None:
     assert client.get("/api/health").json()["ok"] is True
 
 
-def test_preview(client: TestClient) -> None:
-    data = client.get("/api/preview", params={"url": ALBUM}).json()
-    assert data["name"] == "Fake Album" and len(data["tracks"]) == 3
-    assert client.get("/api/preview", params={"url": "nope"}).status_code == 400
-    missing = client.get("/api/preview", params={"url": f"spotify:track:{'7' * 22}"})
-    assert missing.status_code == 404
-
-
 def test_job_lifecycle_and_library(client: TestClient) -> None:
     created = client.post("/api/jobs", json={"url": ALBUM})
     assert created.status_code == 202
