@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from tunegrab import __version__, storage
 from tunegrab.browse import SearchResults
 from tunegrab.config import (
+    COOKIE_BROWSERS,
     Settings,
     coerce_setting,
     config_file,
@@ -84,6 +85,7 @@ UI_SETTINGS = (
     "track_template",
     "playlist_template",
     "video_quality",
+    "cookies_from_browser",
 )
 
 
@@ -115,6 +117,12 @@ def apply_settings(current: Settings, changes: dict[str, Any]) -> Settings:
             validate_template(str(value))
         if key == "output_dir" and value:
             check_music_folder(Path(str(value)))
+        if key == "cookies_from_browser" and value:
+            value = str(value).lower()
+            if value not in COOKIE_BROWSERS:
+                raise ValueError(
+                    f"cookies_from_browser must be one of {', '.join(COOKIE_BROWSERS)}"
+                )
         typed[key] = value
     stored = read_config_file()
     update: dict[str, Any] = {}

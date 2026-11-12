@@ -481,7 +481,7 @@ setting and where its value came from.
 | `lyrics` / `lrc` | on / off | Embed lyrics / also write a synced `.lrc` |
 | `playlist_mode` | `m3u` | `m3u` playlist file, or `folder` per playlist |
 | `match_threshold` | `70` | Minimum match score (0–100) |
-| `cookies_from_browser` | — | e.g. `firefox`, for age-restricted videos |
+| `cookies_from_browser` | — (off) | `firefox`, `chrome`, `edge`, …: YouTube sign-in for age-restricted videos. YouTube can restrict the account used |
 | `video_quality` | `1080` | Highest video resolution: `best`, `2160` … `360` |
 | `video_dir` | `<music folder>/Videos` | Where videos are saved |
 | `track_template` | see below | File naming pattern |
@@ -659,9 +659,11 @@ third time in a job it pauses for an hour (YouTube's block lasts about that long
 when it will continue, with a **Try now** button. After five it stops and leaves the songs
 for **Retry**.
 
-If it keeps happening, turn off any VPN. Using your browser's cookies raises the limit, but
-YouTube can restrict the Google account used, so only do it with an account you can afford
-to lose access to:
+If it keeps happening, turn off any VPN. Signing in raises the limit, but YouTube can
+restrict the Google account used, so only do it with an account you can afford to lose
+access to: in **Settings → YouTube sign-in**, choose the browser you use YouTube in (Firefox
+works best; on Windows, Chromium browsers usually have to be closed and may not be readable).
+The same setting lets you download age-restricted videos. From the command line:
 
 ```powershell
 uv run tunegrab config set cookies_from_browser firefox

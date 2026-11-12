@@ -409,6 +409,10 @@ def test_app_neutral_messages_get_cli_hints() -> None:
     assert "tunegrab doctor --update" in cli_hint(
         f"YouTube refused this download (x). {BREAKAGE_HINT}"
     )
+    from tunegrab.download.ytdlp import AGE_HINT, COOKIES_HINT
+
+    assert "cookies_from_browser firefox" in cli_hint(AGE_HINT)
+    assert "cookies_from_browser firefox" in cli_hint(COOKIES_HINT)
 
 
 def test_no_user_facing_message_names_the_cli_or_dotenv() -> None:

@@ -278,3 +278,32 @@ def test_describe_failure_looks_through_wrapping() -> None:
             raise RuntimeError("HTTP Error 403: Forbidden") from inner
     except RuntimeError as outer:
         assert "update yt-dlp" in describe_failure(outer)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Sign in to confirm your age. This video may be inappropriate for some users.",
+        "This video is age-restricted",
+    ],
+)
+def test_age_restricted_failures_point_to_youtube_sign_in(message: str) -> None:
+    from tunegrab.download.ytdlp import AGE_HINT, describe_failure
+
+    assert describe_failure(DownloadError(message)) == AGE_HINT
+    assert "YouTube sign-in in Settings" in AGE_HINT
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Could not copy Chrome cookie database. See https://github.com/yt-dlp/yt-dlp/issues/7271",
+        "Failed to decrypt with DPAPI",
+        "could not find firefox cookies database in C:/x",
+    ],
+)
+def test_unreadable_browser_cookies_say_what_to_do(message: str) -> None:
+    from tunegrab.download.ytdlp import COOKIES_HINT, describe_failure
+
+    text = describe_failure(DownloadError(message))
+    assert text.startswith(COOKIES_HINT) and message in text

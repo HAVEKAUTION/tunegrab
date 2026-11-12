@@ -136,6 +136,10 @@ class _KeyringSource(PydanticBaseSettingsSource):
         return {"spotify_client_secret": secret} if secret else {}
 
 
+# browsers yt-dlp can read YouTube cookies from (the CLI also accepts "firefox:Profile")
+COOKIE_BROWSERS = ("firefox", "chrome", "edge", "brave", "safari", "opera", "vivaldi")
+
+
 class Settings(BaseSettings):
     """Application settings."""
 
@@ -162,8 +166,8 @@ class Settings(BaseSettings):
     lrc: bool = False  # write a synced .lrc sidecar when available
     match_threshold: float = Field(default=70.0, ge=0, le=100)
     archive_path: Path | None = None
-    # e.g. "firefox" / "chrome": lets yt-dlp use your browser's YouTube cookies for
-    # age-restricted videos.
+    # e.g. "firefox" / "chrome": lets yt-dlp use your browser's YouTube sign-in (cookies)
+    # for age-restricted videos. Off by default: YouTube can restrict the account used.
     cookies_from_browser: str | None = None
     video_quality: VideoQuality = "1080"  # highest video height to download
     video_dir: Path | None = None  # default: <output_dir>/Videos

@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from tests.fakes import ALBUM_ID, FakeServices, make_track
 from tunegrab.config import Settings, read_config_file
+from tunegrab.services import Services
 from tunegrab.web import app as web_app
 from tunegrab.web import jobs as web_jobs
 from tunegrab.web.app import create_app
@@ -351,6 +352,20 @@ def test_settings_roundtrip(client: TestClient, services: FakeServices, tmp_path
     assert services.settings.format == "mp3" and "format" not in read_config_file()
 
 
+def test_youtube_sign_in_is_off_by_default_and_reaches_yt_dlp(
+    client: TestClient, services: FakeServices
+) -> None:
+    assert client.get("/api/settings").json()["values"]["cookies_from_browser"] is None
+    saved = client.post("/api/settings", json={"cookies_from_browser": "Firefox"}).json()
+    assert saved["values"]["cookies_from_browser"] == "firefox"
+    assert read_config_file()["cookies_from_browser"] == "firefox"
+    real = Services.pipeline(services)  # the real yt-dlp downloader, not the fake
+    assert real.downloader.cookies_from_browser == "firefox"  # type: ignore[attr-defined]
+    client.post("/api/settings", json={"cookies_from_browser": ""})
+    assert services.settings.cookies_from_browser is None
+    assert "cookies_from_browser" not in read_config_file()
+
+
 @pytest.mark.parametrize(
     "bad",
     [
@@ -358,6 +373,7 @@ def test_settings_roundtrip(client: TestClient, services: FakeServices, tmp_path
         {"format": "wav"},
         {"archive_path": "x"},
         {"track_template": "{nope}.{ext}"},
+        {"cookies_from_browser": "netscape"},
     ],
 )
 def test_settings_rejects_bad_values(client: TestClient, bad: dict[str, str]) -> None:

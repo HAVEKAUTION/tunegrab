@@ -121,6 +121,8 @@ def cli_hint(message: str) -> str:
         return "Setup steps: docs/SETUP.md"
     if "update yt-dlp in settings" in lowered:
         return "Update it with: tunegrab doctor --update"
+    if "under youtube sign-in in settings" in lowered:
+        return "Sign in with: tunegrab config set cookies_from_browser firefox"
     return ""
 
 

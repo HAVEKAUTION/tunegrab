@@ -99,15 +99,38 @@ class DownloadError(TuneGrabError):
 BREAKAGE_HINT = "YouTube may have changed something: update yt-dlp in Settings, then press Retry."
 
 
+AGE_HINT = (
+    "This video is age-restricted, so YouTube only plays it when you're signed in. "
+    "Choose the browser you use YouTube in under YouTube sign-in in Settings, then press Retry."
+)
+COOKIES_HINT = (
+    "TuneGrab couldn't read the browser's YouTube sign-in. Close that browser and press "
+    "Retry, or choose Firefox under YouTube sign-in in Settings."
+)
+_AGE = re.compile(
+    r"sign in to confirm your age|age[- ]restricted|inappropriate for some users", re.IGNORECASE
+)
+_COOKIES = re.compile(
+    r"cookies? database|decrypt with dpapi|failed to decrypt|could not find .*cookies|"
+    r"failed to load cookies|unsupported browser specified for cookies",
+    re.IGNORECASE,
+)
+
+
 def describe_failure(exc: BaseException) -> str:
-    """The sentence shown for a failed download, with the fix when YouTube refused it."""
+    """The sentence shown for a failed download, with the fix when there is one."""
     message = str(exc) or type(exc).__name__
     current: BaseException | None = exc
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, DownloadError) and current.kind == "blocked":
-            return f"YouTube refused this download ({current}). {BREAKAGE_HINT}"
+        if isinstance(current, DownloadError):
+            if current.kind == "blocked":
+                return f"YouTube refused this download ({current}). {BREAKAGE_HINT}"
+            if _COOKIES.search(str(current)):
+                return f"{COOKIES_HINT} ({current})"
+            if _AGE.search(str(current)):
+                return AGE_HINT
         current = current.__cause__
     return message
 

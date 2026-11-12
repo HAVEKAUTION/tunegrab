@@ -120,6 +120,15 @@
                 <option value="best">Best available</option><option value="2160">4K (2160p)</option><option value="1440">1440p</option><option value="1080">1080p</option><option value="720">720p</option><option value="480">480p</option><option value="360">360p</option></select>
                 <span class="help">The highest resolution to download. 1080p is sharp and plays on anything; above 1080p YouTube only offers VP9/AV1.</span></label>
             </div></div>
+          <div class="card"><h3>YouTube sign-in</h3><p class="muted small">Off unless you need it. TuneGrab can use the YouTube sign-in from a browser on this computer, for age-restricted videos. With YouTube Premium, YouTube can also offer 256 kbps audio.</p>
+            <div class="form-grid">
+              <label class="field"><span class="label">Use sign-in from</span><select id="s-cookies_from_browser" class="select" aria-describedby="cookies-warn">
+                <option value="">Don't sign in</option><option value="firefox">Firefox</option><option value="chrome">Chrome</option><option value="edge">Edge</option>
+                <option value="brave">Brave</option><option value="safari">Safari</option><option value="opera">Opera</option><option value="vivaldi">Vivaldi</option></select>
+                <span class="help">Firefox works best. On Windows, Chrome, Edge and other Chromium browsers usually have to be closed first, and new versions may not be readable at all.</span></label>
+            </div>
+            <div class="banner" id="cookies-warn" style="margin:var(--s-4) 0 0"><svg class="i lg"><use href="#i-alert"/></svg><div class="grow small">
+              YouTube can restrict or ban the Google account used for downloading. Use an account you can afford to lose, not your main one.</div></div></div>
           <div class="card"><h3>Downloads</h3><p class="muted small">How TuneGrab works through your queue.</p>
             <div class="form-grid">
               <label class="field"><span class="label">Songs at once</span><input id="s-threads" class="input tnum" type="number" min="1" max="16"><span class="help">1–16. Four is a good balance.</span></label>

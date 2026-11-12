@@ -939,7 +939,7 @@ $("#tab-library").addEventListener("click", (e) => {
 $("#lib-open").addEventListener("click", () => openPath(null));
 
 // ============================================================== settings
-const SETTING_KEYS = ["output_dir", "format", "bitrate", "threads", "playlist_mode", "lyrics", "lrc", "track_template", "playlist_template", "video_quality"];
+const SETTING_KEYS = ["output_dir", "format", "bitrate", "threads", "playlist_mode", "lyrics", "lrc", "track_template", "playlist_template", "video_quality", "cookies_from_browser"];
 let savedSettings = null;
 function readForm() {
   const v = {};
