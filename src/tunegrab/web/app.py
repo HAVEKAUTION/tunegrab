@@ -32,6 +32,7 @@ from tunegrab.config import (
     config_file,
     log_dir,
     read_config_file,
+    startup_warnings,
     write_config_file,
 )
 from tunegrab.doctor import Status, check_output_dir, run_all, update_ytdlp
@@ -692,7 +693,13 @@ def create_app(
             },
             "default_folder": "output_dir" not in read_config_file(),
             "failures": len(services.archive.open_failures()),
+            "warnings": list(startup_warnings),
         }
+
+    @app.delete("/api/system/warnings")
+    def dismiss_warnings() -> dict[str, Any]:
+        startup_warnings.clear()
+        return {"warnings": []}
 
     @app.get("/api/history")
     def history() -> list[dict[str, Any]]:

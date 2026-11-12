@@ -411,3 +411,17 @@ def test_unusable_music_folder_ends_the_job_with_a_clear_message(
     job = wait_for(client, created["id"], ("error",))
     assert job["error"].startswith("Your music folder") and "Settings" in job["error"]
     assert not client.app.state.manager.busy()  # type: ignore[attr-defined]
+
+
+def test_startup_warnings_are_shown_and_dismissed(client: TestClient) -> None:
+    from tunegrab import config
+
+    config.startup_warnings.append("Your settings file couldn't be read.")
+    try:
+        assert client.get("/api/system").json()["warnings"] == [
+            "Your settings file couldn't be read."
+        ]
+        assert client.delete("/api/system/warnings").status_code == 200
+        assert client.get("/api/system").json()["warnings"] == []
+    finally:
+        config.startup_warnings.clear()

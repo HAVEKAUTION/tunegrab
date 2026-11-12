@@ -564,6 +564,8 @@ function renderSystem() {
       ${failing.map((c) => `<div class="small" style="margin-top:var(--s-1)">${esc(c.name)}: ${esc(c.detail)}${c.hint ? ` — <span class="mono">${esc(c.hint)}</span>` : ""}</div>`).join("")}
       <div class="small muted" style="margin-top:var(--s-1)">Then restart TuneGrab.</div></div>
       <button class="btn sm" data-recheck>${icon("refresh")}Check again</button></div>` : "";
+  $("#system-banner").innerHTML += (s.warnings || []).map((w) => `<div class="banner warn" role="status">${icon("info", "lg")}<div class="grow small">${esc(w)}</div>
+      <button class="btn sm ghost" data-dismiss-warnings>${icon("x")}Dismiss</button></div>`).join("");
   $("#sys-table").innerHTML = s.checks.map((c) => {
     const kind = { ok: ["ok", "check", "Ready"], warn: ["warn", "info", "Optional"], fail: ["bad", "alert", "Missing"] }[c.status] || ["", "info", c.status];
     return `<tr><td>${icon(kind[1])}</td><td><div class="t-title">${esc(c.name)}</div><div class="t-sub">${esc(c.detail)}</div>
@@ -590,6 +592,12 @@ document.addEventListener("click", async (e) => {
     } catch (err) { toast(err.message, { kind: "bad", timeout: 12000 }); }
     update.innerHTML = label; update.disabled = false;
     loadSystem(true);
+  }
+  const dismiss = e.target.closest("[data-dismiss-warnings]");
+  if (dismiss) {
+    dismiss.disabled = true;
+    try { await api("/api/system/warnings", { method: "DELETE" }); if (state.system) state.system.warnings = []; renderSystem(); }
+    catch (err) { dismiss.disabled = false; toast(err.message, { kind: "bad" }); }
   }
   const copy = e.target.closest("[data-copy]");
   if (copy) {

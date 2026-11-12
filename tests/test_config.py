@@ -85,3 +85,19 @@ def test_config_file_roundtrip() -> None:
     s = Settings(_env_file=None)
     assert (s.format, s.threads, s.lyrics, s.match_threshold) == ("m4a", 3, False, 75.5)
     assert s.output_dir == Path("C:\\Music\\Lib")
+
+
+def test_unreadable_config_file_is_set_aside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tunegrab import config
+
+    monkeypatch.setenv("TUNEGRAB_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "startup_warnings", [])
+    (tmp_path / "config.toml").write_text('format = "m4a\nthreads = = 2\n', encoding="utf-8")
+    settings = Settings(_env_file=None)
+    assert settings.format == "mp3"  # defaults
+    kept = list(tmp_path.glob("config.toml.broken-*"))
+    assert len(kept) == 1 and "threads = = 2" in kept[0].read_text(encoding="utf-8")
+    assert not (tmp_path / "config.toml").exists()
+    assert len(config.startup_warnings) == 1 and str(kept[0]) in config.startup_warnings[0]

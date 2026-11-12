@@ -32,6 +32,7 @@ from tunegrab.config import (
     config_file,
     keyring_set,
     read_config_file,
+    startup_warnings,
     write_config_file,
 )
 from tunegrab.doctor import CheckResult, Status, run_all, update_ytdlp
@@ -156,6 +157,7 @@ def _version_callback(value: bool) -> None:
 
 @app.callback()
 def main(
+    ctx: typer.Context,
     version: Annotated[
         bool,
         typer.Option(
@@ -173,6 +175,13 @@ def main(
     """TuneGrab: Spotify metadata -> YouTube audio -> tagged local files."""
     ensure_utf8_output()
     setup_logging(verbose)
+    ctx.call_on_close(_print_startup_warnings)
+
+
+def _print_startup_warnings() -> None:
+    for warning in startup_warnings:
+        console.print(f"[yellow]Note:[/] {escape(warning)}")
+    startup_warnings.clear()
 
 
 # --- running jobs ---------------------------------------------------------------------

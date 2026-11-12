@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import tomllib
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -23,6 +25,8 @@ from pydantic_settings import (
     SettingsConfigDict,
     TomlConfigSettingsSource,
 )
+
+log = logging.getLogger(__name__)
 
 APP_NAME = "tunegrab"
 KEYRING_SERVICE = "tunegrab"
@@ -53,6 +57,40 @@ def data_dir() -> Path:
 def log_dir() -> Path:
     override = os.environ.get("TUNEGRAB_LOG_DIR")
     return Path(override) if override else user_log_path(APP_NAME, appauthor=False)
+
+
+# Problems found and repaired at startup (a broken settings file or database), shown once
+# in the app and the CLI so the user knows where their old file went.
+startup_warnings: list[str] = []
+
+
+def set_aside(path: Path, label: str) -> Path:
+    """Rename an unreadable file to ``<name>.<label>-<timestamp>`` (never delete it)."""
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = path.with_name(f"{path.name}.{label}-{stamp}")
+    path.replace(target)
+    return target
+
+
+def recover_config_file(path: Path | None = None) -> None:
+    """If config.toml can't be parsed, move it aside so TuneGrab starts with defaults."""
+    path = path or config_file()
+    if not path.exists():
+        return
+    try:
+        with path.open("rb") as handle:
+            tomllib.load(handle)
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
+        try:
+            kept = set_aside(path, "broken")
+        except OSError:
+            log.exception("could not move the unreadable settings file %s", path)
+            raise
+        log.warning("settings file %s was unreadable (%s); kept as %s", path, exc, kept)
+        startup_warnings.append(
+            f"Your settings file couldn't be read ({exc}), so TuneGrab started with default "
+            f"settings. The old file was kept as {kept}."
+        )
 
 
 def keyring_enabled() -> bool:
@@ -154,6 +192,7 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
+        recover_config_file()
         return (
             init_settings,
             env_settings,

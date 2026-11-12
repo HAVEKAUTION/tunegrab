@@ -254,3 +254,31 @@ def test_move_into_place_keeps_existing_files_and_cleans_up_on_failure(tmp_path:
     with pytest.raises(OSError):
         move_into_place(tmp_path / "missing.mp3", target)
     assert not (tmp_path / "a (3).mp3").exists()  # the placeholder was removed
+
+
+def test_corrupt_database_is_set_aside_and_replaced(tmp_path: Path) -> None:
+    from tunegrab.library import archive as archive_module
+
+    archive_module.startup_warnings.clear()
+    db = tmp_path / "tunegrab.db"
+    db.write_bytes(b"this is not a database" * 100)
+    with Archive(db) as archive:
+        archive.record_download(make_track(1), tmp_path / "a.mp3", "vid", "mp3")
+        assert archive.stats()["downloads"] == 1
+    kept = list(tmp_path.glob("tunegrab.db.corrupt-*"))
+    assert len(kept) == 1 and kept[0].read_bytes().startswith(b"this is not")
+    assert len(archive_module.startup_warnings) == 1
+    assert "music files are untouched" in archive_module.startup_warnings[0]
+    archive_module.startup_warnings.clear()
+
+
+def test_one_unreadable_row_does_not_break_the_library(tmp_path: Path) -> None:
+    with Archive(tmp_path / "t.db") as archive:
+        archive.record_download(make_track(1), tmp_path / "a.mp3", "v1", "mp3")
+        archive.record_download(make_track(2), tmp_path / "b.mp3", "v2", "mp3")
+        archive._execute(
+            "UPDATE downloads SET track_json = '{\"title\": 5}' WHERE key = ?",
+            (make_track(1).key,),
+        )
+        assert [r.track.title for r in archive.all_downloads()] == ["Song 2"]
+        assert archive.get_download(make_track(1).key) is None

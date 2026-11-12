@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
+from pydantic import ValidationError
+
+from tunegrab.config import set_aside, startup_warnings
 from tunegrab.models import Candidate, Collection, Track
+
+log = logging.getLogger(__name__)
+T = TypeVar("T")
 
 SCHEMA_VERSION = 1
 SCHEMA = """
@@ -105,19 +113,50 @@ class FailureRecord:
 class Archive:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
-        if str(path) != ":memory:":
+        self._memory = str(path) == ":memory:"
+        if not self._memory:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(str(path), check_same_thread=False, timeout=30)
-        self._conn.row_factory = sqlite3.Row
-        with self._lock, self._conn:
-            if str(path) != ":memory:":
-                self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.executescript(SCHEMA)
-            self._conn.execute(
-                "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
-                (str(SCHEMA_VERSION),),
-            )
+        try:
+            self._conn = self._open()
+        except sqlite3.DatabaseError as exc:
+            if self._memory:
+                raise
+            self._conn = self._recover(exc)
+
+    def _open(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.path), check_same_thread=False, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            with conn:
+                if not self._memory:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                        raise sqlite3.DatabaseError("integrity check failed")
+                conn.executescript(SCHEMA)
+                conn.execute(
+                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
+                    (str(SCHEMA_VERSION),),
+                )
+        except BaseException:
+            conn.close()
+            raise
+        return conn
+
+    def _recover(self, exc: sqlite3.DatabaseError) -> sqlite3.Connection:
+        """The download history is damaged: keep it aside and start a fresh one."""
+        kept = set_aside(self.path, "corrupt")
+        for suffix in ("-wal", "-shm"):
+            side = self.path.with_name(self.path.name + suffix)
+            if side.exists():
+                set_aside(side, "corrupt")
+        log.error("download history %s was unreadable (%s); kept as %s", self.path, exc, kept)
+        startup_warnings.append(
+            f"Your download history couldn't be read ({exc}), so TuneGrab started a new one. "
+            f"Your music files are untouched; the old history was kept as {kept}. Songs you "
+            "already have are recognised again when you download them."
+        )
+        return self._open()
 
     def close(self) -> None:
         with self._lock:
@@ -166,7 +205,7 @@ class Archive:
 
     def job_history(self) -> list[dict[str, Any]]:
         rows = self._execute("SELECT summary FROM job_history ORDER BY finished_at DESC")
-        return [json.loads(r["summary"]) for r in rows]
+        return _parse_rows(rows, lambda r: dict(json.loads(r["summary"])), "job history")
 
     def clear_job_history(self) -> int:
         with self._lock, self._conn:
@@ -175,7 +214,8 @@ class Archive:
     # --- downloads -------------------------------------------------------------------
     def get_download(self, key: str) -> DownloadRecord | None:
         rows = self._execute("SELECT * FROM downloads WHERE key = ?", (key,))
-        return self._download_row(rows[0]) if rows else None
+        found = _parse_rows(rows, self._download_row, "download")
+        return found[0] if found else None
 
     def downloaded_path(self, key: str) -> Path | None:
         """Path of an archived download whose file still exists."""
@@ -213,7 +253,7 @@ class Archive:
 
     def all_downloads(self) -> list[DownloadRecord]:
         rows = self._execute("SELECT * FROM downloads ORDER BY artist, album, title")
-        return [self._download_row(r) for r in rows]
+        return _parse_rows(rows, self._download_row, "download")
 
     @staticmethod
     def _download_row(row: sqlite3.Row) -> DownloadRecord:
@@ -290,8 +330,9 @@ class Archive:
 
     def open_failures(self) -> list[FailureRecord]:
         rows = self._execute("SELECT * FROM failures WHERE resolved = 0 ORDER BY id")
-        return [
-            FailureRecord(
+        return _parse_rows(
+            rows,
+            lambda r: FailureRecord(
                 id=r["id"],
                 key=r["key"],
                 job_input=r["job_input"],
@@ -303,9 +344,9 @@ class Archive:
                 stage=r["stage"],
                 reason=r["reason"],
                 failed_at=r["failed_at"],
-            )
-            for r in rows
-        ]
+            ),
+            "failure",
+        )
 
     def resolve_failures(self, key: str) -> None:
         self._execute("UPDATE failures SET resolved = 1 WHERE key = ? AND resolved = 0", (key,))
@@ -347,7 +388,9 @@ class Archive:
             "ORDER BY position",
             (playlist_id,),
         )
-        return [(r["position"], Track.model_validate_json(r["track_json"])) for r in rows]
+        return _parse_rows(
+            rows, lambda r: (r["position"], Track.model_validate_json(r["track_json"])), "member"
+        )
 
     def playlist_name(self, playlist_id: str) -> str | None:
         rows = self._execute("SELECT name FROM playlists WHERE playlist_id = ?", (playlist_id,))
@@ -381,3 +424,17 @@ class Archive:
 
 def dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
+
+
+def _parse_rows(
+    rows: Iterable[sqlite3.Row], parse: Callable[[sqlite3.Row], T], what: str
+) -> list[T]:
+    """Parse rows, skipping (and logging) any that no longer fit the model, so one bad
+    record can't take down the whole Library or retry list."""
+    parsed: list[T] = []
+    for row in rows:
+        try:
+            parsed.append(parse(row))
+        except (ValidationError, ValueError, TypeError, KeyError) as exc:
+            log.warning("skipping an unreadable %s record: %s", what, exc)
+    return parsed
