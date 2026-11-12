@@ -169,6 +169,8 @@ class Settings(BaseSettings):
     # e.g. "firefox" / "chrome": lets yt-dlp use your browser's YouTube sign-in (cookies)
     # for age-restricted videos. Off by default: YouTube can restrict the account used.
     cookies_from_browser: str | None = None
+    # once a day, ask GitHub and PyPI whether a newer TuneGrab / yt-dlp is out
+    check_updates: bool = True
     video_quality: VideoQuality = "1080"  # highest video height to download
     video_dir: Path | None = None  # default: <output_dir>/Videos
 

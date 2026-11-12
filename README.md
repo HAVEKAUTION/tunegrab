@@ -296,7 +296,8 @@ uv run tunegrab doctor --update   # update yt-dlp (do this whenever YouTube down
 ```
 
 Or in the app: **Settings → System → Update yt-dlp**, then restart TuneGrab. The launcher
-re-syncs everything else by itself on the next start.
+re-syncs everything else by itself on the next start. The app tells you when a new TuneGrab
+or yt-dlp is out (checked once a day; **Settings → Updates** turns it off).
 
 </details>
 
@@ -483,6 +484,7 @@ setting and where its value came from.
 | `match_threshold` | `70` | Minimum match score (0–100) |
 | `cookies_from_browser` | — (off) | `firefox`, `chrome`, `edge`, …: YouTube sign-in for age-restricted videos. YouTube can restrict the account used |
 | `video_quality` | `1080` | Highest video resolution: `best`, `2160` … `360` |
+| `check_updates` | `true` | Once a day, ask GitHub and PyPI whether a newer TuneGrab or yt-dlp is out |
 | `video_dir` | `<music folder>/Videos` | Where videos are saved |
 | `track_template` | see below | File naming pattern |
 
@@ -598,8 +600,11 @@ Yes. Downloads keep running as long as the launcher window is open. Reopen
 <br>
 
 Only requests to Spotify (track information), YouTube / YouTube Music (search and audio),
-LRCLIB (lyrics) and the image servers for cover art. There's no tracking or crash reporting.
-Logs stay on your PC (**Settings → About** shows where).
+LRCLIB (lyrics) and the image servers for cover art. Once a day TuneGrab also asks GitHub
+and PyPI for the newest TuneGrab and yt-dlp version numbers (turn it off in
+**Settings → Updates**, or `tunegrab config set check_updates false`); nothing about you or
+your music is sent. There's no tracking or crash reporting. Logs stay on your PC
+(**Settings → About** shows where).
 
 </details>
 

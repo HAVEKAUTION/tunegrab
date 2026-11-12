@@ -114,6 +114,7 @@ function renderSystem() {
       <button class="btn sm" data-recheck>${icon("refresh")}Check again</button></div>` : "";
   $("#system-banner").innerHTML += (s.warnings || []).map((w) => `<div class="banner warn" role="status">${icon("info", "lg")}<div class="grow small">${esc(w)}</div>
       <button class="btn sm ghost" data-dismiss-warnings>${icon("x")}Dismiss</button></div>`).join("");
+  $("#system-banner").innerHTML += updateBanners(s.updates);
   $("#sys-table").innerHTML = s.checks.map((c) => {
     const kind = { ok: ["ok", "check", "Ready"], warn: ["warn", "info", "Optional"], fail: ["bad", "alert", "Missing"] }[c.status] || ["", "info", c.status];
     return `<tr><td>${icon(kind[1])}</td><td><div class="t-title">${esc(c.name)}</div><div class="t-sub">${esc(c.detail)}</div>
@@ -126,10 +127,36 @@ function renderSystem() {
     .map(([k, v, copy]) => `<dt>${k}</dt><dd class="${copy ? "mono" : ""}">${esc(v)}</dd><dd>${copy ? `<button class="btn ghost icon sm" data-copy="${esc(copy)}" aria-label="Copy ${k.toLowerCase()} path" title="Copy path">${icon("copy")}</button>` : ""}</dd>`).join("");
   renderFirstRun();
 }
+// newer TuneGrab / yt-dlp (checked by the server once a day); each version can be dismissed
+const dismissedUpdates = new Set(JSON.parse(localStorage.getItem("tg-dismissed-updates") || "[]"));
+function updateBanners(u) {
+  if (!u) return "";
+  const out = [];
+  if (u.tunegrab && !dismissedUpdates.has(`tunegrab:${u.tunegrab}`)) {
+    out.push(`<div class="banner" role="status">${icon("download", "lg")}<div class="grow small"><b>TuneGrab ${esc(u.tunegrab)} is available</b> (you have ${esc(u.tunegrab_current)}).
+      To update, run the install line again (or <span class="mono">git pull</span>), then restart TuneGrab.
+      ${u.tunegrab_url ? `<a href="${esc(u.tunegrab_url)}" target="_blank" rel="noopener">What's new</a>` : ""}</div>
+      <button class="btn sm ghost" data-dismiss-update="tunegrab:${esc(u.tunegrab)}">${icon("x")}Dismiss</button></div>`);
+  }
+  if (u.ytdlp && !dismissedUpdates.has(`ytdlp:${u.ytdlp}`)) {
+    out.push(`<div class="banner" role="status">${icon("download", "lg")}<div class="grow small"><b>yt-dlp ${esc(u.ytdlp)} is available</b> (you have ${esc(u.ytdlp_current || "an older one")}).
+      YouTube changes often, and a current yt-dlp keeps downloads working.</div>
+      <button class="btn sm" data-update-ytdlp>${icon("download")}Update yt-dlp</button>
+      <button class="btn sm ghost" data-dismiss-update="ytdlp:${esc(u.ytdlp)}">${icon("x")}Dismiss</button></div>`);
+  }
+  return out.join("");
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-dismiss-update]");
+  if (!b) return;
+  dismissedUpdates.add(b.dataset.dismissUpdate);
+  localStorage.setItem("tg-dismissed-updates", JSON.stringify([...dismissedUpdates]));
+  renderSystem();
+});
 document.addEventListener("click", async (e) => {
   const recheck = e.target.closest("[data-recheck], #sys-recheck");
   if (recheck) { recheck.disabled = true; await loadSystem(true); recheck.disabled = false; toast("Checked your setup again."); }
-  const update = e.target.closest("#sys-update");
+  const update = e.target.closest("[data-update-ytdlp]");
   if (update) {
     update.disabled = true;
     const label = update.innerHTML;
@@ -939,7 +966,7 @@ $("#tab-library").addEventListener("click", (e) => {
 $("#lib-open").addEventListener("click", () => openPath(null));
 
 // ============================================================== settings
-const SETTING_KEYS = ["output_dir", "format", "bitrate", "threads", "playlist_mode", "lyrics", "lrc", "track_template", "playlist_template", "video_quality", "cookies_from_browser"];
+const SETTING_KEYS = ["output_dir", "format", "bitrate", "threads", "playlist_mode", "lyrics", "lrc", "track_template", "playlist_template", "video_quality", "cookies_from_browser", "check_updates"];
 let savedSettings = null;
 function readForm() {
   const v = {};

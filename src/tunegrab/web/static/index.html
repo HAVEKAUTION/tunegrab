@@ -143,12 +143,15 @@
               <label class="field"><span class="label">Albums and songs</span><input id="s-track_template" class="input mono" type="text"></label>
               <label class="field"><span class="label">Playlist folders</span><input id="s-playlist_template" class="input mono" type="text"><span class="help">Used when Playlists is set to “Copy songs into a playlist folder”.</span></label>
             </div></div>
+          <div class="card"><h3>Updates</h3>
+            <label class="check"><input id="s-check_updates" type="checkbox"> Tell me when a new TuneGrab or yt-dlp is out</label>
+            <p class="help" style="margin:var(--s-2) 0 0">Once a day TuneGrab asks GitHub and PyPI for their newest version numbers. Nothing about you or your music is sent.</p></div>
           <div class="savebar"><span id="settings-msg" class="small muted" role="status">No unsaved changes.</span>
             <div class="row"><button type="button" class="btn ghost" id="s-reset">Reset to defaults</button>
               <button type="submit" class="btn primary" id="s-save"><svg class="i"><use href="#i-check"/></svg>Save</button></div></div>
         </form>
         <div class="card" style="margin-top:var(--s-4)"><div class="row between"><h3>System</h3>
-          <div class="row"><button class="btn sm ghost" id="sys-update" title="Get the newest yt-dlp. YouTube changes often, and an old yt-dlp is the most common reason downloads fail."><svg class="i"><use href="#i-download"/></svg>Update yt-dlp</button>
+          <div class="row"><button class="btn sm ghost" id="sys-update" data-update-ytdlp title="Get the newest yt-dlp. YouTube changes often, and an old yt-dlp is the most common reason downloads fail."><svg class="i"><use href="#i-download"/></svg>Update yt-dlp</button>
           <button class="btn sm" id="sys-recheck"><svg class="i"><use href="#i-refresh"/></svg>Check again</button></div></div>
           <p class="muted small" style="margin:var(--s-1) 0 var(--s-3)">Tools TuneGrab needs to download and convert audio.</p>
           <table class="checks"><tbody id="sys-table"></tbody></table></div>

@@ -27,6 +27,7 @@ from tunegrab.config import (
     Settings,
     coerce_setting,
     config_file,
+    data_dir,
     log_dir,
     pin_music_folder,
     read_config_file,
@@ -43,6 +44,7 @@ from tunegrab.models import Candidate, Job, TaskStatus, Track
 from tunegrab.net import NetworkError
 from tunegrab.runner import unexpected_message as unexpected_error
 from tunegrab.services import Services, build_services
+from tunegrab.updates import UpdateChecker
 from tunegrab.urls import (
     InvalidURLError,
     SpotifyRef,
@@ -86,6 +88,7 @@ UI_SETTINGS = (
     "playlist_template",
     "video_quality",
     "cookies_from_browser",
+    "check_updates",
 )
 
 
@@ -177,6 +180,7 @@ def create_app(
     owned = services is None
     services = services or build_services(settings or pin_music_folder(Settings()))
     manager = JobManager(services)
+    updates = UpdateChecker(services.http, data_dir() / "update-check.json")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -237,6 +241,8 @@ def create_app(
                 ],
             )
         checks = system_cache["checks"]
+        if services.settings.check_updates:
+            updates.check_in_background()  # at most once a day; shows on a later refresh
         return {
             "version": __version__,
             "ok": all(c["status"] != "fail" for c in checks),
@@ -251,6 +257,7 @@ def create_app(
             "failures": len(services.archive.open_failures())
             + len(services.archive.video_failures()),
             "warnings": list(startup_warnings),
+            "updates": updates.info().payload() if services.settings.check_updates else None,
         }
 
     @app.delete("/api/system/warnings")
