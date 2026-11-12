@@ -190,3 +190,25 @@ def test_m3u8_relative_paths(tmp_path: Path) -> None:
         "../Artist/Album/01 - Song.mp3",
     ]
     assert read_m3u8(target) == [song.resolve()]
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "{title.__class__}.{ext}",  # attribute lookups (format-string tricks)
+        "{title[0]}.{ext}",  # index lookups
+        "{title}.{ext}.bat",  # must end in the audio extension
+        "{ext}/{title}",
+    ],
+)
+def test_validate_template_rejects_tricks(template: str) -> None:
+    with pytest.raises(TemplateError):
+        validate_template(template)
+
+
+def test_render_path_blocks_lookups_and_traversal(tmp_path: Path) -> None:
+    track = make_track(1)
+    with pytest.raises(TemplateError):
+        render_path("{title.__class__}.{ext}", template_fields(track, "mp3"), tmp_path)
+    path = render_path("../../{title}.{ext}", template_fields(track, "mp3"), tmp_path)
+    assert tmp_path in path.parents

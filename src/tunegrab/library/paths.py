@@ -88,15 +88,20 @@ def validate_template(template: str) -> None:
     for _, field, _, _ in string.Formatter().parse(template):
         if field is None:
             continue
-        base = field.split(".")[0].split("[")[0]
-        if base not in TEMPLATE_FIELDS:
+        if field not in TEMPLATE_FIELDS:
             known = ", ".join(sorted(TEMPLATE_FIELDS))
             raise TemplateError(f"Unknown template field {{{field}}}. Known fields: {known}")
-    if "{ext}" not in template.replace(" ", ""):
+    if not template.rstrip().endswith(".{ext}"):
         raise TemplateError("Template must end with .{ext}")
 
 
 class _Formatter(string.Formatter):
+    def get_field(self, field_name: str, args: Sequence[Any], kwargs: Mapping[str, Any]) -> Any:
+        # Plain names only: no "{title.__class__}" / "{title[0]}" lookups.
+        if field_name not in TEMPLATE_FIELDS:
+            raise TemplateError(f"Unknown template field {{{field_name}}}")
+        return self.get_value(field_name, args, kwargs), field_name
+
     def get_value(self, key: int | str, args: Sequence[Any], kwargs: Mapping[str, Any]) -> Any:
         if isinstance(key, int):
             raise TemplateError("Positional fields are not allowed in templates")

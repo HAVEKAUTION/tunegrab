@@ -8,8 +8,10 @@ from tunegrab.matching.scoring import (
     artist_similarity,
     duration_score,
     normalise,
+    padded_music_video,
     penalty_words,
     score,
+    strip_accents,
 )
 from tunegrab.models import Candidate, Track
 
@@ -51,7 +53,7 @@ def cand(
         ("Beyoncé – Café", "beyonce cafe"),
         ("Rock & Roll", "rock and roll"),
         ("  Hello,   World!!  ", "hello world"),
-        ("アイドル", "アイトル"),  # NFKD splits the voiced mark; both sides get the same
+        ("アイドル", "アイドル"),  # Japanese voiced marks are kept (only Latin accents go)
     ],
 )
 def test_normalise(raw: str, expected: str) -> None:
@@ -122,3 +124,29 @@ def test_matching_cases(case: dict[str, Any]) -> None:
 
 def test_enough_cases() -> None:
     assert len(CASES) >= 30
+
+
+def test_strip_accents_only_latin() -> None:
+    assert strip_accents("Beyoncé Mötley Crüe") == "Beyonce Motley Crue"
+    assert strip_accents("がっこう") == "がっこう"  # voiced marks change the word
+    assert strip_accents("й") == "й"  # a different letter in Russian
+    assert normalise("ＡＢＣ") == "abc"  # full-width letters still fold
+
+
+@pytest.mark.parametrize("word", ["Extended Mix", "Acoustic", "Unplugged", "Demo"])
+def test_other_versions_are_penalised(word: str) -> None:
+    assert penalty_words("Song", f"Song ({word})")
+    assert not penalty_words(f"Song - {word}", f"Song ({word})")  # asked for it
+
+
+def test_padded_music_video_keeps_half_duration_points() -> None:
+    song = track("Song", ["Band"], 200)
+    video = cand("Band - Song (Official Music Video)", ["Band"], 245, source="youtube")
+    plain = cand("Band - Song (Live)", ["Band"], 245, source="youtube")
+    assert padded_music_video(song, video) and duration_score(song, video) == 0.5
+    assert not padded_music_video(song, plain) and duration_score(song, plain) == 0.0
+    shorter = cand("Band - Song (Official Video)", ["Band"], 150, source="youtube")
+    assert duration_score(song, shorter) == 0.0  # cut-down videos get no help
+    huge = cand("Band - Song (Official Video)", ["Band"], 400, source="youtube")
+    assert duration_score(song, huge) == 0.0
+    assert "(music video)" in score(song, video)[1]

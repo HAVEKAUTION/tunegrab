@@ -5,7 +5,8 @@
 | ISRC exact match | instant 100 |
 | Title (token_set_ratio of normalised titles) | 40% |
 | Artist (best overlap of artist sets) | 30% |
-| Duration | 30%: full <= 3 s, linear to 0 at >= 20 s |
+| Duration | 30%: full <= 3 s, linear to 0 at >= 20 s (official music videos up to
+  90 s longer get at least half: intros/outros) |
 | Source | +5 for YouTube Music "song" results |
 | Penalty | -30 for live/cover/remix/... in the candidate but not the Spotify title |
 | Different artist | -20 when the artist similarity is below 50 |
@@ -31,6 +32,7 @@ SONG_BONUS = 5.0
 PENALTY = 30.0
 DURATION_FULL_S = 3.0
 DURATION_ZERO_S = 20.0
+MUSIC_VIDEO_PADDING_S = 90.0
 SUBSET_ARTIST_SCORE = 85.0
 TITLE_ONLY_ARTIST_SCORE = 70.0
 ARTIST_MISMATCH_BELOW = 50.0
@@ -75,6 +77,11 @@ PENALTY_WORDS: tuple[str, ...] = (
     "in the style of",
     "originally performed",
     "tribute",
+    # other recordings of the same song:
+    "extended",
+    "acoustic",
+    "unplugged",
+    "demo",
 )
 _PENALTY_PATTERNS = {w: re.compile(rf"(?<![\w]){re.escape(w)}(?![\w])") for w in PENALTY_WORDS}
 
@@ -92,13 +99,25 @@ _JUNK_BRACKET = re.compile(
 _JUNK_WORDS = re.compile(
     r"\b(?:official\s+(?:music\s+)?(?:video|audio)|lyric video)\b", re.IGNORECASE
 )
+_MUSIC_VIDEO = re.compile(
+    r"\b(?:official\s+(?:music\s+)?video|music\s+video|m/v|mv)\b", re.IGNORECASE
+)
 _PUNCT = re.compile(r"[^\w\s]")
 _SPACES = re.compile(r"\s+")
 
 
+_LATIN_END = "\u0250"  # end of Latin Extended-B
+
+
 def strip_accents(text: str) -> str:
-    decomposed = unicodedata.normalize("NFKD", text)
-    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    """Drop accents from Latin letters (Beyoncé -> Beyonce) but keep marks that make
+    a different letter in other scripts (Japanese が stays が, Russian й stays й)."""
+    kept: list[str] = []
+    for ch in unicodedata.normalize("NFKD", text):
+        if unicodedata.combining(ch) and kept and kept[-1] < _LATIN_END:
+            continue
+        kept.append(ch)
+    return unicodedata.normalize("NFC", "".join(kept))
 
 
 def normalise(text: str) -> str:
@@ -168,16 +187,29 @@ def artist_similarity(track: Track, candidate: Candidate) -> float:
     return best
 
 
+def padded_music_video(track: Track, candidate: Candidate) -> bool:
+    """An official music video that is longer than the song by an intro/outro."""
+    if candidate.source == "ytmusic_song" or not track.duration_ms or not candidate.duration_s:
+        return False
+    extra = candidate.duration_s - track.duration_s
+    return DURATION_FULL_S < extra <= MUSIC_VIDEO_PADDING_S and bool(
+        _MUSIC_VIDEO.search(candidate.title)
+    )
+
+
 def duration_score(track: Track, candidate: Candidate) -> float | None:
-    """1.0 for <= 3 s difference, linear to 0.0 at >= 20 s; None when unknown."""
+    """1.0 for <= 3 s difference, linear to 0.0 at >= 20 s; None when unknown.
+    Padded official music videos score at least 0.5 (as if the duration were unknown)."""
     if not track.duration_ms or not candidate.duration_s:
         return None
     diff = abs(track.duration_s - candidate.duration_s)
     if diff <= DURATION_FULL_S:
-        return 1.0
-    if diff >= DURATION_ZERO_S:
-        return 0.0
-    return 1.0 - (diff - DURATION_FULL_S) / (DURATION_ZERO_S - DURATION_FULL_S)
+        value = 1.0
+    elif diff >= DURATION_ZERO_S:
+        value = 0.0
+    else:
+        value = 1.0 - (diff - DURATION_FULL_S) / (DURATION_ZERO_S - DURATION_FULL_S)
+    return max(value, 0.5) if padded_music_video(track, candidate) else value
 
 
 def score(track: Track, candidate: Candidate) -> tuple[float, str]:
@@ -194,7 +226,10 @@ def score(track: Track, candidate: Candidate) -> tuple[float, str]:
         reasons.append("duration unknown")
     else:
         diff = abs(track.duration_s - candidate.duration_s)
-        reasons.append(f"duration Δ{diff:.0f}s")
+        reasons.append(
+            f"duration Δ{diff:.0f}s"
+            + (" (music video)" if padded_music_video(track, candidate) else "")
+        )
     if candidate.source == "ytmusic_song":
         total += SONG_BONUS
         reasons.append("+5 YT Music song")

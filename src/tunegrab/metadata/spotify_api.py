@@ -108,7 +108,17 @@ class SpotifyAuth:
 
     def _load_user(self) -> dict[str, Any] | None:
         if not self._user_loaded:
-            self._user_token = self.store.load()
+            token = self.store.load()
+            owner = token.get("client_id") if token else None
+            if owner and owner != self.client_id:
+                # Logged in with another Spotify app; its token (and refresh token) would
+                # keep acting as that app. Ignore it until `tunegrab login` is run again.
+                log.warning(
+                    "Ignoring the saved Spotify login: it belongs to a different client ID. "
+                    "Run `tunegrab login` again."
+                )
+                token = None
+            self._user_token = token
             self._user_loaded = True
         return self._user_token
 
@@ -180,6 +190,7 @@ class SpotifyAuth:
             return None
         new = _token_with_expiry(response.json(), self.clock())
         new.setdefault("refresh_token", refresh)
+        new["client_id"] = self.client_id
         self._user_token = new
         try:
             self.store.save(new)
@@ -306,6 +317,7 @@ def login(
     token = exchange_code(
         http, settings.spotify_client_id, code, verifier, settings.spotify_redirect_uri
     )
+    token["client_id"] = settings.spotify_client_id  # see SpotifyAuth._load_user
     (store or TokenStore()).save(token)
     return token
 

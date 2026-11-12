@@ -214,3 +214,44 @@ def test_retry_failures_across_restart(client: TestClient, services: FakeService
     assert retried.status_code == 202 and retried.json()["name"] == "Retry failed tracks"
     assert wait_for(client, retried.json()["id"], ("finished",))["counts"]["done"] == 3
     assert services.archive.open_failures() == []
+
+
+def test_fix_failed_song_with_youtube_link(client: TestClient, services: FakeServices) -> None:
+    services.settings = services.settings.model_copy(update={"retries": 0})
+    services.downloader.fail_times = 3
+    job = wait_for(
+        client, client.post("/api/jobs", json={"url": ALBUM}).json()["id"], ("finished",)
+    )
+    assert job["counts"]["failed"] == 3
+    task = job["tasks"][1]
+    url = f"/api/jobs/{job['id']}/tasks/{task['id']}/fix"
+    assert client.post(url, json={"youtube_url": "not a link"}).status_code == 400
+    missing = f"/api/jobs/{job['id']}/tasks/nope/fix"
+    assert client.post(missing, json={"youtube_url": "dQw4w9WgXcQ"}).status_code == 404
+    fixed = client.post(url, json={"youtube_url": "https://youtu.be/dQw4w9WgXcQ"})
+    assert fixed.status_code == 202
+    again = wait_for(client, fixed.json()["id"], ("finished",))
+    assert again["counts"]["done"] == 1 and len(again["tasks"]) == 1
+    assert "dQw4w9WgXcQ" in again["tasks"][0]["match"]["url"]
+    key = next(t for t in services.archive.all_downloads()).key
+    cached = services.archive.get_match(key)
+    assert (
+        cached is not None
+        and cached[0].video_id == "dQw4w9WgXcQ"
+        and cached[2] == "manual override"
+    )
+    done_task = again["tasks"][0]
+    done_url = f"/api/jobs/{again['id']}/tasks/{done_task['id']}/fix"
+    assert client.post(done_url, json={"youtube_url": "dQw4w9WgXcQ"}).status_code == 409
+
+
+def test_csv_import_job(client: TestClient) -> None:
+    text = "Track Name,Artist Name(s),Track Duration (ms)\nSong One,Fake Artist,200000\n"
+    created = client.post("/api/jobs", json={"csv_text": text, "name": "My Mix"})
+    assert created.status_code == 202
+    job = wait_for(client, created.json()["id"], ("finished", "error"))
+    assert job["state"] == "finished" and job["name"] == "My Mix" and job["total"] == 1
+    bad = client.post("/api/jobs", json={"csv_text": "foo,bar\n1,2\n"})
+    assert wait_for(client, bad.json()["id"], ("error",))["error"].startswith("The CSV needs")
+    both = client.post("/api/jobs", json={"csv_text": text, "url": ALBUM})
+    assert both.status_code == 400

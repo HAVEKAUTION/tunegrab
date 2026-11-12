@@ -4,11 +4,11 @@
 
 **Pick the albums and songs you want from Spotify, and get a tidy, fully tagged music library on your own drive.**
 
-![Version](https://img.shields.io/badge/version-0.2.0-22c55e)
+![Version](https://img.shields.io/badge/version-0.3.0-22c55e)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776ab)
 ![Platforms](https://img.shields.io/badge/runs%20on-Windows%20%7C%20macOS%20%7C%20Linux-555)
 ![Local only](https://img.shields.io/badge/runs-100%25%20local-0ea5e9)
-![Tests](https://img.shields.io/badge/tests-309%20passing-22c55e)
+![Tests](https://img.shields.io/badge/tests-329%20passing-22c55e)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 
 [Features](#-features) · [Install](#-install) · [Using the app](#%EF%B8%8F-using-the-app) · [Command line](#-command-line) · [Settings](#%EF%B8%8F-settings) · [FAQ](#-faq) · [Troubleshooting](#-troubleshooting)
@@ -64,6 +64,8 @@ audio comes from YouTube. TuneGrab never touches Spotify's own audio streams.
 <br>
 
 - Collect albums, songs and playlists from as many artists as you like into one queue.
+- **Import a CSV** of a playlist or your Liked Songs (for example from
+  [Exportify](https://exportify.app)). No Spotify login needed.
 - The queue is kept if you close the page or restart your PC.
 - **Review** shows everything queued; remove items or clear the lot, with **Undo**.
 - **Download** (or `Ctrl+Enter`) starts the whole queue in one go.
@@ -80,6 +82,8 @@ audio comes from YouTube. TuneGrab never touches Spotify's own audio streams.
 - Several songs download at once (you choose how many).
 - Anything already in your library is skipped, so it's safe to stop and start again.
 - Failed songs show why. **Retry failed songs** works even after a restart.
+- TuneGrab couldn't find a song? Press **Use a YouTube link** next to it, paste the right
+  video and it downloads that one, and remembers it for next time.
 - Download history is kept between sessions.
 
 <img src="docs/images/downloads.jpg" alt="The Downloads screen with an album half downloaded, showing match scores and per-song status" width="800">
@@ -107,9 +111,14 @@ audio comes from YouTube. TuneGrab never touches Spotify's own audio streams.
 
 - Searches YouTube Music first (official audio), then regular YouTube.
 - Scores every candidate on title, artist, duration and album, and penalises live,
-  cover, karaoke, sped-up and remix versions you didn't ask for.
+  cover, karaoke, sped-up, remix, extended, acoustic and demo versions you didn't ask for.
+- Official music videos aren't thrown out just because their intro makes them longer.
+- Titles are compared as written in any script (Japanese, Korean, Cyrillic, ...); only
+  Latin accents are folded (Beyoncé = Beyonce).
+- When two results score the same, YouTube's own ranking decides.
 - Songs that score below the threshold (default 70) are flagged instead of downloaded wrongly.
-- Fix a bad match once (`tunegrab fix`) and TuneGrab remembers it.
+- Fix a bad match once (**Use a YouTube link** in the app, or `tunegrab fix`) and
+  TuneGrab remembers it.
 
 </details>
 
@@ -306,11 +315,29 @@ Paste the Spotify link into **Get music** and press **Download now** to skip the
 </details>
 
 <details>
+<summary><b>Download your Liked Songs (or any playlist) from a CSV</b></summary>
+
+<br>
+
+1. Go to [exportify.app](https://exportify.app), log in with Spotify and press **Export**
+   next to *Liked Songs* (or any playlist). You get a `.csv` file.
+2. In TuneGrab, under the search box on **Get music**, click **Import a CSV file** and pick it.
+3. Everything downloads as one playlist named after the file, with its own `.m3u8`.
+
+Any CSV with **Track Name** and **Artist Name(s)** columns works (commas, semicolons or tabs),
+and so does a single **Track URI** column of Spotify links. From a terminal:
+`tunegrab download --from-file Liked_Songs.csv`.
+
+</details>
+
+<details>
 <summary><b>Fix failed or wrong songs</b></summary>
 
 <br>
 
 - **Failed:** open **Downloads** and press **Retry failed songs**. Each failure shows its reason.
+- **Not found at all:** press **Use a YouTube link** under the failed song, paste the right
+  video (there's a search link right in the dialog) and press **Download this one**.
 - **Wrong version downloaded:** run `tunegrab match <spotify-link>` to see the scores, then
   `tunegrab fix <spotify-track-link> <youtube-link>` to force the right video. TuneGrab
   remembers the fix for next time.
@@ -341,6 +368,7 @@ tunegrab get "Daft Punk - One More Time"                        # one song, best
 tunegrab download https://open.spotify.com/album/2noRn2Aes5aoNVsU6iWThc
 tunegrab download <playlist-url> -f m4a -o D:\Music             # choose format and folder
 tunegrab download --from-file my-links.txt                      # one link per line
+tunegrab download --from-file Liked_Songs.csv                   # an Exportify CSV
 tunegrab serve                                                  # start the app
 ```
 
@@ -351,7 +379,7 @@ tunegrab serve                                                  # start the app
 
 | Command | What it does |
 |---|---|
-| `download <url-or-query>... [--from-file list.txt]` | The main command. Accepts several inputs; `--from-file` reads one per line (`#` comments OK). Options: `-f/--format mp3\|m4a\|opus\|flac`, `-b/--bitrate`, `-o/--out`, `-t/--threads`, `--lyrics/--no-lyrics`, `--lrc` (synced `.lrc` file), `--playlist-mode m3u\|folder`. |
+| `download <url-or-query>... [--from-file list.txt]` | The main command. Accepts several inputs; `--from-file` reads one per line (`#` comments OK), or a `.csv` export (Exportify etc.). Options: `-f/--format mp3\|m4a\|opus\|flac`, `-b/--bitrate`, `-o/--out`, `-t/--threads`, `--lyrics/--no-lyrics`, `--lrc` (synced `.lrc` file), `--playlist-mode m3u\|folder`. |
 | `get "artist - title"` | Download the top search result. |
 | `search "query"` | Show results and pick one interactively. |
 | `info <url>` | List the tracks behind a link without downloading. |
@@ -442,6 +470,17 @@ Full walkthrough: [`docs/SETUP.md`](docs/SETUP.md).
 
 No. Public links and artist names work with no account. Premium is only needed if you
 want to create your own Spotify developer app (see [Settings](#%EF%B8%8F-settings)).
+
+</details>
+
+<details>
+<summary><b>Can I download my Liked Songs?</b></summary>
+
+<br>
+
+Yes. Export them with [Exportify](https://exportify.app) and use **Import a CSV file** on
+**Get music**. TuneGrab reads the song details straight from the file, so it doesn't need
+your Spotify login.
 
 </details>
 
@@ -613,7 +652,7 @@ ytmusicapi + rapidfuzz (matching), yt-dlp, mutagen, SQLite.
 
 ```powershell
 uv sync                         # install everything
-uv run pytest -q                # 309 unit tests (network mocked)
+uv run pytest -q                # 329 unit tests (network mocked)
 uv run pytest -m live -q        # real-network smoke tests
 uv run ruff check --fix . ; uv run ruff format . ; uv run mypy src
 uv run python scripts/check_design.py   # UI colour-contrast check

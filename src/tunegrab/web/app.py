@@ -21,7 +21,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from tunegrab import __version__
 from tunegrab.config import (
@@ -34,13 +34,14 @@ from tunegrab.config import (
     write_config_file,
 )
 from tunegrab.doctor import run_all
+from tunegrab.imports import collection_from_csv
 from tunegrab.library.paths import TemplateError, validate_template
 from tunegrab.matching.base import SearchError
 from tunegrab.metadata.base import MetadataError, NotFoundError
-from tunegrab.models import Collection, Job, Match, TaskStatus, TrackTask
+from tunegrab.models import Candidate, Collection, Job, Match, TaskStatus, Track, TrackTask
 from tunegrab.pipeline import Pipeline
 from tunegrab.services import Services, build_services
-from tunegrab.urls import InvalidURLError, SpotifyRef, is_spotify_input
+from tunegrab.urls import InvalidURLError, SpotifyRef, is_spotify_input, parse_youtube_id
 
 log = logging.getLogger(__name__)
 
@@ -57,12 +58,14 @@ class JobRequest(BaseModel):
     * ``url``: a Spotify link or search text (optionally only ``track_ids`` of it);
     * ``ytm_album``: a YouTube Music album browse ID (optionally only ``track_ids``,
       which are video IDs);
-    * ``spotify_tracks``: Spotify track IDs, downloaded as one job called ``name``.
+    * ``spotify_tracks``: Spotify track IDs, downloaded as one job called ``name``;
+    * ``csv_text``: an Exportify-style CSV, downloaded as a playlist called ``name``.
     """
 
     url: str | None = None
     ytm_album: str | None = None
     spotify_tracks: list[str] | None = None
+    csv_text: str | None = Field(default=None, max_length=20_000_000)
     track_ids: list[str] | None = None
     name: str | None = None
     format: AudioFormat | None = None
@@ -219,6 +222,18 @@ class JobManager:
             ]
             collection.tracks = [t.track for t in tasks]
             return Job(input=request.label, collection=collection, tasks=tasks)
+        if request.csv_text:
+            collection = collection_from_csv(
+                request.csv_text,
+                (request.name or "Imported songs").strip() or "Imported songs",
+                lookup=lambda tid: self.services.resolver.resolve_ref(
+                    SpotifyRef("track", tid)
+                ).tracks[0],
+            )
+            tasks = [
+                TrackTask(track=t, position=i) for i, t in enumerate(collection.tracks, start=1)
+            ]
+            return Job(input=request.label, collection=collection, tasks=tasks)
         if request.spotify_tracks:
             tracks = [
                 self.services.resolver.resolve_ref(SpotifyRef("track", tid)).tracks[0]
@@ -314,9 +329,14 @@ class JobManager:
         self._spawn(self._run(job, self.services.pipeline(on_event=self._on_event)))
         return job
 
-    def retry(self, job_id: str) -> Job:
+    def retry(self, job_id: str, task_ids: set[str] | None = None) -> Job:
+        """Re-run the failed tracks of a job (or only ``task_ids`` of them)."""
         old = self.jobs[job_id]
-        failed = [t for t in old.tasks if t.status == TaskStatus.FAILED]
+        failed = [
+            t
+            for t in old.tasks
+            if t.status == TaskStatus.FAILED and (task_ids is None or t.id in task_ids)
+        ]
         if not failed:
             raise ValueError("This job has no failed tracks.")
         tasks = [TrackTask(track=t.track, position=t.position) for t in failed]
@@ -416,6 +436,27 @@ def pick_folder(initial: Path) -> str | None:
 
 class OpenRequest(BaseModel):
     path: str | None = None
+
+
+class FixRequest(BaseModel):
+    youtube_url: str
+
+
+def manual_candidate(services: Services, track: Track, video_id: str) -> Candidate:
+    """The chosen YouTube video as a match candidate; falls back to the track's own
+    details when the video can't be looked up (it is still downloaded by ID)."""
+    try:
+        found = services.youtube.video(video_id)
+    except SearchError as exc:
+        log.info("video lookup failed for %s: %s", video_id, exc)
+        return Candidate(
+            video_id=video_id,
+            title=track.title,
+            artists=track.artists,
+            duration_s=round(track.duration_s),
+            source="manual",
+        )
+    return found.model_copy(update={"source": "manual"})
 
 
 def host_name(host_header: str) -> str:
@@ -535,9 +576,10 @@ def create_app(
             bool(request.url and request.url.strip()),
             bool(request.ytm_album),
             bool(request.spotify_tracks),
+            bool(request.csv_text and request.csv_text.strip()),
         ]
         if sum(sources) != 1:
-            raise HTTPException(400, "Give one of url, ytm_album or spotify_tracks")
+            raise HTTPException(400, "Give one of url, ytm_album, spotify_tracks or csv_text")
         job = await manager.submit(request)
         return job_summary(job)
 
@@ -616,6 +658,27 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
         return job_summary(job)
+
+    @app.post("/api/jobs/{job_id}/tasks/{task_id}/fix", status_code=202)
+    async def fix_task(job_id: str, task_id: str, body: FixRequest) -> dict[str, Any]:
+        """Use a YouTube link the user picked for a failed song, remember it, retry."""
+        job = _job(job_id)
+        task = next((t for t in job.tasks if t.id == task_id), None)
+        if task is None:
+            raise HTTPException(404, "No such song in this download")
+        if task.status != TaskStatus.FAILED:
+            raise HTTPException(409, "Only failed songs can be given a link here")
+        try:
+            video_id = parse_youtube_id(body.youtube_url)
+        except InvalidURLError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        candidate = await asyncio.to_thread(manual_candidate, services, task.track, video_id)
+        services.archive.put_match(task.track.key, candidate, 100.0, "manual override", manual=True)
+        try:
+            retried = manager.retry(job_id, {task_id})
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return job_summary(retried)
 
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel_job(job_id: str) -> dict[str, Any]:

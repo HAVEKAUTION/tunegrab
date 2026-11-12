@@ -9,7 +9,7 @@ import socket
 import threading
 import time
 import webbrowser
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, Any
@@ -34,6 +34,7 @@ from tunegrab.config import (
 )
 from tunegrab.doctor import CheckResult, Status, run_all, update_ytdlp
 from tunegrab.download.convert import FORMAT_HELP
+from tunegrab.imports import CsvImportError, collection_from_csv
 from tunegrab.library.paths import TemplateError, validate_template
 from tunegrab.library.playlists import playlist_file
 from tunegrab.logs import setup_logging
@@ -51,7 +52,7 @@ from tunegrab.ui import (
     summary_table,
     tracks_table,
 )
-from tunegrab.urls import InvalidURLError, parse_spotify_url, parse_youtube_id
+from tunegrab.urls import InvalidURLError, SpotifyRef, parse_spotify_url, parse_youtube_id
 
 log = logging.getLogger(__name__)
 
@@ -232,6 +233,8 @@ def _exit_code(jobs: list[Job]) -> int:
 
 def _read_inputs(inputs: list[str] | None, from_file: Path | None) -> list[str]:
     items = list(inputs or [])
+    if from_file is not None and from_file.suffix.lower() == ".csv":
+        return items  # handled by _csv_job
     if from_file is not None:
         try:
             lines = from_file.read_text(encoding="utf-8-sig").splitlines()
@@ -243,6 +246,29 @@ def _read_inputs(inputs: list[str] | None, from_file: Path | None) -> list[str]:
     return items
 
 
+def _csv_job(services: Services, path: Path) -> Job:
+    """A playlist job from an Exportify-style CSV (see tunegrab.imports)."""
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        raise _fail(f"Cannot read {path}: {exc}") from exc
+    name = path.stem.replace("_", " ").strip() or "Imported songs"
+    try:
+        with console.status(f"Reading {escape(path.name)} ..."):
+            collection = collection_from_csv(text, name, lookup=_spotify_track(services))
+    except CsvImportError as exc:
+        raise _fail(str(exc)) from exc
+    tasks = [TrackTask(track=t, position=i) for i, t in enumerate(collection.tracks, start=1)]
+    return Job(input=str(path), collection=collection, tasks=tasks)
+
+
+def _spotify_track(services: Services) -> Callable[[str], Track]:
+    def lookup(track_id: str) -> Track:
+        return services.resolver.resolve_ref(SpotifyRef("track", track_id)).tracks[0]
+
+    return lookup
+
+
 @app.command()
 def download(
     inputs: Annotated[
@@ -250,7 +276,12 @@ def download(
         typer.Argument(help="Spotify track/album/playlist/artist URLs, or 'artist - title'."),
     ] = None,
     from_file: Annotated[
-        Path | None, typer.Option("--from-file", "-i", help="Text file with one input per line.")
+        Path | None,
+        typer.Option(
+            "--from-file",
+            "-i",
+            help="Text file with one input per line, or a CSV export (e.g. from Exportify).",
+        ),
     ] = None,
     fmt: FormatOpt = None,
     bitrate: BitrateOpt = None,
@@ -261,7 +292,8 @@ def download(
     playlist_mode: PlaylistModeOpt = None,
 ) -> None:
     """Download everything in one or more Spotify links (the main command)."""
-    items = _read_inputs(inputs, from_file)
+    is_csv = from_file is not None and from_file.suffix.lower() == ".csv"
+    items = _read_inputs(inputs, from_file) if (inputs or not is_csv) else []
     settings = load_settings(
         format=fmt,
         bitrate=bitrate,
@@ -272,7 +304,10 @@ def download(
         playlist_mode=playlist_mode,
     )
     with services_for(settings) as services:
-        jobs = run_jobs(services, [(item, item) for item in items])
+        builders: list[tuple[str, Any]] = [(item, item) for item in items]
+        if is_csv and from_file is not None:
+            builders.append((from_file.name, _csv_job(services, from_file)))
+        jobs = run_jobs(services, builders)
     raise typer.Exit(_exit_code(jobs))
 
 

@@ -327,6 +327,9 @@ details.tracks table { margin-top: var(--s-2); }
           <button class="btn" type="button" id="now-btn" title="Download the whole link straight away, or the best match for “artist - title”"><svg class="i"><use href="#i-download"/></svg>Download now</button>
         </form>
         <div id="finder-error" class="small error-text" role="alert" style="margin-top:var(--s-2)"></div>
+        <p class="small faint" style="margin-top:var(--s-2)">Have a playlist or Liked Songs export?
+          <button type="button" id="csv-btn" class="linkish" style="font-size:var(--fs-sm);color:var(--info)" title="CSV files from Exportify (exportify.app) or any list with Track Name and Artist Name columns">Import a CSV file</button>
+          <input type="file" id="csv-file" accept=".csv,text/csv" hidden></p>
         <div id="browse" style="margin-top:var(--s-6)"></div>
       </section>
 
@@ -409,6 +412,21 @@ details.tracks table { margin-top: var(--s-2); }
     <tr><td><kbd>Ctrl</kbd> <kbd>Enter</kbd></td><td>Download the queue</td></tr>
     <tr><td><kbd>Esc</kbd></td><td>Close a panel</td></tr>
     <tr><td><kbd>?</kbd></td><td>Show this list</td></tr></tbody></table></div>
+</dialog>
+<dialog id="fix-dialog" class="modal" aria-labelledby="fix-title">
+  <form id="fix-form" novalidate>
+    <div class="d-head"><h3 id="fix-title">Use a YouTube link</h3><button type="button" class="btn ghost icon" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="d-body" style="display:grid;gap:var(--s-3)">
+      <p class="small"><span class="muted">Song:</span> <strong id="fix-song"></strong></p>
+      <label class="field"><span class="label">YouTube or YouTube Music link</span>
+        <input id="fix-url" class="input" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://music.youtube.com/watch?v=…">
+        <span class="help">TuneGrab remembers this link for the song and downloads it straight away.</span></label>
+      <p class="small"><a id="fix-search" href="#" target="_blank" rel="noopener">Search YouTube Music for this song <svg class="i"><use href="#i-external"/></svg></a></p>
+      <p id="fix-error" class="small error-text" role="alert"></p>
+    </div>
+    <div class="d-foot"><button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" id="fix-submit" class="btn primary"><svg class="i"><use href="#i-download"/></svg>Download this one</button></div>
+  </form>
 </dialog>
 
 <script>
@@ -580,6 +598,24 @@ async function downloadNow() {
   finally { btn.disabled = false; }
 }
 $("#now-btn").addEventListener("click", downloadNow);
+
+// CSV import (Exportify etc.): the browser reads the file and sends its text.
+const CSV_MAX_BYTES = 20e6;
+$("#csv-btn").addEventListener("click", () => $("#csv-file").click());
+$("#csv-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  if (file.size > CSV_MAX_BYTES) { setFinderError("That file is over 20 MB. Split it into smaller lists."); return; }
+  const name = file.name.replace(/\.csv$/i, "").replace(/_/g, " ").trim() || "Imported songs";
+  const btn = $("#csv-btn"); btn.disabled = true; setFinderError("");
+  try {
+    const job = await api("/api/jobs", { method: "POST", body: JSON.stringify({ csv_text: await file.text(), name, format: $("#format").value || null }) });
+    upsertJob(job);
+    toast(`Importing “${name}”.`, { action: { label: "View", run: () => showTab("jobs") } });
+  } catch (err) { setFinderError(err.message); }
+  finally { btn.disabled = false; }
+});
 
 function skeletonGrid() {
   return `<div class="row" style="gap:var(--s-4);margin-bottom:var(--s-6)"><div class="skeleton" style="width:64px;height:64px;border-radius:50%"></div>
@@ -952,7 +988,10 @@ function renderJob(job, openDetails) {
 function renderTask(t) {
   const [kind, ic, label] = STATUS[t.status] || ["", "info", t.status];
   const busy = ["matching", "downloading", "converting", "tagging", "resolving"].includes(t.status);
-  const detail = t.status === "failed" ? `<div class="small error-text">${esc(t.error)}</div>`
+  const job = state.jobs.get(t.job_id);
+  const canFix = t.status === "failed" && job && !ACTIVE.includes(job.state);
+  const fixBtn = canFix ? `<button class="btn sm ghost" style="margin-top:var(--s-1)" data-fix="${esc(t.job_id)}" data-task="${esc(t.id)}">${icon("external")}Use a YouTube link</button>` : "";
+  const detail = t.status === "failed" ? `<div class="small error-text">${esc(t.error)}</div>${fixBtn}`
     : t.status === "skipped" && t.message ? `<div class="xs faint">${esc(t.message)}</div>` : "";
   const match = t.match ? `<a class="xs" href="${esc(t.match.url)}" target="_blank" rel="noopener" title="${esc(t.match.reason)}">YouTube ${icon("external")} <span class="tnum">match ${t.match.score}</span></a>` : "";
   return `<tr><td class="c-num tnum">${t.position}</td>
@@ -961,6 +1000,34 @@ function renderTask(t) {
     <td class="c-end">${match}</td><td class="c-time tnum">${fmtTime(t.duration_s)}</td>
     <td class="c-end"><span class="pill ${kind}">${icon(ic, busy ? "spin" : "")}${label}</span></td></tr>`;
 }
+// "Use a YouTube link" for a song TuneGrab couldn't find (or found wrongly and failed).
+let fixTarget = null;
+function openFix(jobId, taskId) {
+  const t = state.tasks.get(taskId);
+  if (!t) return;
+  fixTarget = { jobId, taskId };
+  const name = `${t.artists.join(", ")} - ${t.title}`;
+  $("#fix-song").textContent = name;
+  $("#fix-search").href = `https://music.youtube.com/search?q=${encodeURIComponent(name)}`;
+  $("#fix-url").value = ""; $("#fix-error").textContent = "";
+  $("#fix-submit").disabled = false;
+  $("#fix-dialog").showModal(); $("#fix-url").focus();
+}
+$("#fix-dialog").addEventListener("click", (e) => {
+  if (e.target.closest("[data-close]") || e.target === $("#fix-dialog")) $("#fix-dialog").close();
+});
+$("#fix-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const url = $("#fix-url").value.trim();
+  if (!url) { $("#fix-error").textContent = "Paste a YouTube link first."; $("#fix-url").focus(); return; }
+  const btn = $("#fix-submit"); btn.disabled = true; $("#fix-error").textContent = "";
+  try {
+    const job = await api(`/api/jobs/${fixTarget.jobId}/tasks/${fixTarget.taskId}/fix`, { method: "POST", body: JSON.stringify({ youtube_url: url }) });
+    upsertJob(job); $("#fix-dialog").close();
+    toast("Saved. Downloading it from that link now.");
+  } catch (err) { btn.disabled = false; $("#fix-error").textContent = err.message; }
+});
+
 async function loadHistory() {
   try { state.history = await api("/api/history"); }
   catch (err) { state.history = []; toast(`Couldn't load earlier downloads: ${err.message}`, { kind: "bad" }); }
@@ -980,6 +1047,7 @@ $("#tab-jobs").addEventListener("click", async (e) => {
   const b = e.target.closest("button");
   if (!b) return;
   if (b.hasAttribute("data-goto-get")) { showTab("get"); $("#url").focus(); return; }
+  if (b.dataset.fix) { openFix(b.dataset.fix, b.dataset.task); return; }
   if (b.dataset.retry) {
     b.disabled = true;
     try { upsertJob(await api(`/api/jobs/${b.dataset.retry}/retry`, { method: "POST" })); toast("Retrying the failed songs."); }

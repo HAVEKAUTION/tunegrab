@@ -375,3 +375,13 @@ def test_resolver_short_link() -> None:
     assert (
         Resolver([FakeMetadata()], HttpClient(retries=0)).parse("https://spotify.link/abc").id == ID
     )
+
+
+def test_saved_login_from_another_client_id_is_ignored(http: HttpClient) -> None:
+    far = time.time() + 3600
+    other = MemoryTokenStore({"access_token": "u", "expires_at": far, "client_id": "old-app"})
+    assert SpotifyAuth("cid", "secret", http, other).has_user is False
+    same = MemoryTokenStore({"access_token": "u", "expires_at": far, "client_id": "cid"})
+    assert SpotifyAuth("cid", "secret", http, same).access_token() == "u"
+    legacy = MemoryTokenStore({"access_token": "u", "expires_at": far})  # saved before 0.3
+    assert SpotifyAuth("cid", "secret", http, legacy).has_user is True

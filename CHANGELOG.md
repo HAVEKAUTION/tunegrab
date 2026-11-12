@@ -2,6 +2,32 @@
 
 All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
 
+## 0.3.0 — 2026-11-13
+
+Ideas and bug reports from other downloaders' issue trackers, checked against TuneGrab.
+
+### Added
+- **Use a YouTube link** for a failed song in Downloads: paste the right video, TuneGrab
+  downloads it and remembers it (like `tunegrab fix`, without the terminal).
+- **CSV import** of playlists or Liked Songs (Exportify exports or any list with track name
+  and artist columns) in the app and with `tunegrab download --from-file list.csv`. Songs
+  are read straight from the file, so no Spotify login or API calls are needed.
+
+### Changed
+- Matching penalises extended, acoustic, unplugged and demo versions you didn't ask for.
+- Official music videos up to 90 s longer than the song (intros/outros) keep half the
+  duration points instead of none.
+- Only Latin accents are folded when comparing titles; Japanese voiced marks and other
+  scripts' letters are kept, so different titles no longer look identical.
+
+### Fixed
+- A saved Spotify login made with a different client ID is ignored instead of being used
+  until it expires.
+
+### Security
+- File-name templates only accept plain fields (`{title}`, not `{title.__class__}` or
+  `{title[0]}`) and must end in `.{ext}`.
+
 ## 0.2.0 — 2026-11-12
 
 ### Added
