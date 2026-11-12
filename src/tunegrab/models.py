@@ -162,6 +162,8 @@ class Job(BaseModel):
     error: str | None = None
     # ids of failed tasks already handed to a retry job (each failure is retried once)
     retried: set[str] = Field(default_factory=set)
+    # set while YouTube has blocked downloads from this connection (rate limit)
+    paused_until: datetime | None = None
 
     @property
     def name(self) -> str:

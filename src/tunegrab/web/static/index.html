@@ -1135,7 +1135,10 @@ function updateJobView(v, job) {
       <div class="row"><span class="pill ${kind}">${running ? icon("loader", "spin") : ""}${label}</span>
         ${running ? `<button class="btn sm" data-cancel="${job.id}">${icon("stop")}Cancel</button>` : ""}
         ${!running && job.retryable && job.taskIds ? `<button class="btn sm" data-retry="${job.id}">${icon("refresh")}Retry ${job.retryable} failed</button>` : ""}</div>`);
-  setHtml(v.notes, `${job.error ? `<p class="small error-text" style="margin-top:var(--s-2)">${esc(job.error)}</p>` : ""}
+  const paused = running && job.paused_until ? new Date(job.paused_until) : null;
+  setHtml(v.notes, `${paused ? `<div class="row" style="margin-top:var(--s-2);gap:var(--s-2)"><p class="small" style="color:var(--warn)">${icon("alert")} YouTube paused downloads from your connection. TuneGrab continues at ${paused.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.</p>
+      <button class="btn sm" data-resume="${job.id}">${icon("refresh")}Try now</button></div>` : ""}
+    ${job.error ? `<p class="small error-text" style="margin-top:var(--s-2)">${esc(job.error)}</p>` : ""}
     ${(job.warnings || []).map((w) => `<p class="small" style="color:var(--warn);margin-top:var(--s-2)">${esc(w)}</p>`).join("")}`);
   setHtml(v.progress, job.total ? `<div class="bar ${c.failed ? "warn" : ""}" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(job.name)} progress"><i style="width:${pct}%"></i></div>
       <div class="job-stats tnum"><span>${finished} of ${job.total}</span><span>${c.done || 0} done</span>${c.skipped ? `<span>${c.skipped} already had</span>` : ""}${c.failed ? `<span class="error-text">${c.failed} failed</span>` : ""}</div>` : "");
@@ -1235,6 +1238,10 @@ $("#tab-jobs").addEventListener("click", async (e) => {
   if (b.dataset.retry) {
     b.disabled = true;
     try { upsertJob(await api(`/api/jobs/${b.dataset.retry}/retry`, { method: "POST" })); toast("Retrying the failed songs."); }
+    catch (err) { b.disabled = false; toast(err.message, { kind: "bad" }); }
+  } else if (b.dataset.resume) {
+    b.disabled = true;
+    try { upsertJob(await api(`/api/jobs/${b.dataset.resume}/resume`, { method: "POST" })); toast("Trying again now. If YouTube still refuses, TuneGrab pauses again."); }
     catch (err) { b.disabled = false; toast(err.message, { kind: "bad" }); }
   } else if (b.dataset.cancel) {
     b.disabled = true;

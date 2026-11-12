@@ -15,6 +15,7 @@ from tunegrab.metadata.base import NotFoundError
 from tunegrab.metadata.resolver import Resolver
 from tunegrab.models import Candidate, Collection, Track
 from tunegrab.net import HttpClient
+from tunegrab.pacing import Pacer
 from tunegrab.pipeline import Pipeline
 from tunegrab.services import Services
 
@@ -301,6 +302,8 @@ def make_pipeline(
         cover_fetcher=lambda url: b"\xff\xd8\xffcover",
         retry_backoff=0.0,
         rate_limit_pause=0.0,
+        rate_limit_block=0.0,
+        pacer=Pacer(0),
     )
     return pipeline, archive
 
@@ -339,6 +342,7 @@ class FakeServices(Services):
             query_lookup=self.lookup_query,
             on_event=on_event,
             retry_backoff=0.0,
+            pacer=Pacer(0),
         )
 
 

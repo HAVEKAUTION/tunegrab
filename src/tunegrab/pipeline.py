@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
@@ -37,6 +37,7 @@ from tunegrab.library.playlists import playlist_file, write_m3u8
 from tunegrab.matching.matcher import Matcher
 from tunegrab.metadata.resolver import Resolver
 from tunegrab.models import Candidate, Collection, Job, Match, TaskStatus, Track, TrackTask
+from tunegrab.pacing import Pacer, youtube_pacer
 from tunegrab.preflight import DISK_FULL, check_folder, is_disk_full
 from tunegrab.tagging.lyrics import Lyrics, write_lrc
 from tunegrab.urls import is_spotify_input
@@ -48,6 +49,14 @@ STALE_TMP_AGE_S = 6 * 3600
 RETRY_BACKOFF_S = 2.0
 RATE_LIMIT_PAUSE_S = 60.0  # first pause when YouTube says "too many requests"
 RATE_LIMIT_MAX_PAUSE_S = 300.0
+# After this many "slow down" answers in one job YouTube is blocking the connection, which
+# lasts about an hour; knocking again during it only makes it worse.
+RATE_LIMIT_BLOCK_AFTER = 3
+RATE_LIMIT_BLOCK_S = 3600.0
+RATE_LIMIT_GIVE_UP_AFTER = 5
+RATE_LIMIT_GAVE_UP = (
+    "YouTube keeps refusing downloads from your connection. Wait an hour or two, then press Retry."
+)
 MAX_ALTERNATIVES = 3  # other videos to try when the chosen one is unavailable
 
 EventCallback = Callable[[Job, TrackTask | None], None]
@@ -97,10 +106,15 @@ class Pipeline:
     on_event: EventCallback | None = None
     retry_backoff: float = RETRY_BACKOFF_S
     rate_limit_pause: float = RATE_LIMIT_PAUSE_S
+    rate_limit_block: float = RATE_LIMIT_BLOCK_S
+    # None: the process-wide pacer for YouTube (see tunegrab.pacing)
+    pacer: Pacer | None = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
     # Shared by all worker threads: no new download starts before this time.
     _cooldown_until: float = field(default=0.0, init=False, repr=False)
-    _cooldown_strikes: int = field(default=0, init=False, repr=False)
+    _cooldown_strikes: int = field(default=0, init=False, repr=False)  # in a row
+    _job_strikes: int = field(default=0, init=False, repr=False)  # in this job
+    _paused_job: Job | None = field(default=None, init=False, repr=False)
     _cooldown_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     # Set when the whole job must stop (e.g. the disk is full); a sentence for the user.
     abort_reason: str | None = field(default=None, init=False)
@@ -137,6 +151,16 @@ class Pipeline:
     # --- running ---------------------------------------------------------------------
     def cancel(self) -> None:
         self.cancel_event.set()
+
+    def resume(self) -> bool:
+        """End a rate-limit pause early (the user pressed Try now). False if not paused."""
+        with self._cooldown_lock:
+            if self._cooldown_until <= time.monotonic():
+                return False
+            self._cooldown_until = 0.0
+            self._cooldown_strikes = 0
+        log.info("rate-limit pause ended early by the user")
+        return True
 
     def abort(self, reason: str) -> None:
         """Stop the whole job because of ``reason`` (the songs not done are failed, so
@@ -240,26 +264,58 @@ class Pipeline:
         return job
 
     # --- YouTube rate limits ------------------------------------------------------------
-    def _rate_limited(self) -> float:
-        """YouTube said "slow down": pause every worker, longer each time it repeats."""
+    def _rate_limited(self, job: Job | None = None) -> float:
+        """YouTube said "slow down": pause every worker, longer each time it repeats; on
+        the third time in a job pause for an hour, on the fifth stop the job."""
         with self._cooldown_lock:
             self._cooldown_strikes += 1
-            pause = min(
-                RATE_LIMIT_MAX_PAUSE_S, self.rate_limit_pause * 2.0 ** (self._cooldown_strikes - 1)
-            )
+            self._job_strikes += 1
+            if self._job_strikes >= RATE_LIMIT_GIVE_UP_AFTER:
+                pause = 0.0
+            elif self._job_strikes >= RATE_LIMIT_BLOCK_AFTER:
+                pause = self.rate_limit_block
+            else:
+                pause = min(
+                    RATE_LIMIT_MAX_PAUSE_S,
+                    self.rate_limit_pause * 2.0 ** (self._cooldown_strikes - 1),
+                )
             self._cooldown_until = max(self._cooldown_until, time.monotonic() + pause)
-            return pause
+            give_up = self._job_strikes >= RATE_LIMIT_GIVE_UP_AFTER
+        if give_up:
+            self.abort(RATE_LIMIT_GAVE_UP)
+        elif job is not None and pause >= self.rate_limit_block > 0:
+            job.paused_until = datetime.now(UTC) + timedelta(seconds=pause)
+            self._emit(job)
+        return pause
 
     def _wait_for_cooldown(self, job: Job, task: TrackTask) -> None:
         while True:
             with self._cooldown_lock:
                 remaining = self._cooldown_until - time.monotonic()
             if remaining <= 0:
+                if job.paused_until is not None:
+                    job.paused_until = None
+                    self._emit(job)
                 return
-            task.message = f"YouTube asked to slow down: waiting {remaining:.0f} s"
+            if job.paused_until is not None:
+                at = job.paused_until.astimezone().strftime("%H:%M")
+                task.message = f"YouTube paused downloads from your connection: continuing at {at}"
+            else:
+                task.message = f"YouTube asked to slow down: waiting {remaining:.0f} s"
             self._emit(job, task)
-            if self.cancel_event.wait(min(remaining, 5.0)):
+            if self.cancel_event.wait(min(remaining, 1.0)):  # short: Try now reacts fast
                 raise Cancelled()
+
+    def _pace(self, job: Job, task: TrackTask) -> None:
+        """Wait for a start slot under YouTube's hourly budget (see tunegrab.pacing)."""
+        pacer = self.pacer or youtube_pacer(bool(self.settings.cookies_from_browser))
+        wait = pacer.reserve()
+        if wait <= 0:
+            return
+        task.message = f"Pacing downloads to stay under YouTube's limit: starting in {wait:.0f} s"
+        self._emit(job, task)
+        if self.cancel_event.wait(wait):
+            raise Cancelled()
 
     def _finish_playlist(self, job: Job) -> None:
         collection = job.collection
@@ -475,7 +531,13 @@ class Pipeline:
         blocked in this country, age-gated) try the next-best match instead."""
         tried: set[str] = set()
         while True:
+            if self.cancel_event.is_set():
+                raise Cancelled()
             self._wait_for_cooldown(job, task)
+            self._pace(job, task)
+            if task.message and task.message.startswith(("Pacing", "YouTube")):
+                task.message = ""
+                self._emit(job, task)
 
             def on_source(info: SourceInfo) -> None:
                 task.source = info.label
@@ -493,9 +555,10 @@ class Pipeline:
                 raise
             except DownloadError as exc:
                 if exc.kind == "rate_limited":
-                    pause = self._rate_limited()
+                    # Not the song's fault: wait and try it again without using a retry.
+                    pause = self._rate_limited(job)
                     log.warning("YouTube rate limit; pausing downloads for %.0f s", pause)
-                    raise TaskFailed(f"YouTube asked to slow down ({exc})") from exc
+                    continue
                 if exc.kind != "unavailable" or candidate.source == "manual":
                     raise
                 tried.add(candidate.video_id)

@@ -51,6 +51,7 @@ from tunegrab.download.ytdlp import (
 )
 from tunegrab.library.paths import move_into_place, sanitize_segment
 from tunegrab.models import Collection, Job, TaskStatus, Track, TrackTask
+from tunegrab.pacing import Pacer, youtube_pacer
 from tunegrab.preflight import DISK_FULL, check_folder, is_disk_full
 
 log = logging.getLogger(__name__)
@@ -539,6 +540,8 @@ class VideoPipeline:
     downloader: VideoDownloader | None = None
     on_event: EventCallback | None = None
     retry_backoff: float = 2.0
+    # None: the process-wide pacer for YouTube (see tunegrab.pacing)
+    pacer: Pacer | None = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
     abort_reason: str | None = field(default=None, init=False)
 
@@ -606,6 +609,18 @@ class VideoPipeline:
         attempts = self.settings.retries + 1
         for attempt in range(1, attempts + 1):
             task.attempts = attempt
+            pacer = self.pacer or youtube_pacer(bool(self.settings.cookies_from_browser))
+            wait = pacer.reserve()
+            if wait > 0:
+                self._set(
+                    job,
+                    task,
+                    task.status,
+                    f"Pacing downloads to stay under YouTube's limit: starting in {wait:.0f} s",
+                )
+                if self.cancel_event.wait(wait):
+                    self._set(job, task, TaskStatus.SKIPPED, "cancelled")
+                    return
             try:
                 self._download(job, task, entry, target)
                 return

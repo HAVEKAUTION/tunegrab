@@ -33,6 +33,12 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         if key.startswith("SPOTIFY_") or (key.startswith("TUNEGRAB_") and key not in _KEEP):
             monkeypatch.delenv(key, raising=False)
     monkeypatch.chdir(tmp_path)
+    # no YouTube pacing in tests (tests/test_pacing.py covers it with a fake clock)
+    from tunegrab import pacing
+
+    monkeypatch.setattr(pacing, "_shared", pacing.Pacer(0))
+    monkeypatch.setattr(pacing, "GUEST_PER_HOUR", 0)
+    monkeypatch.setattr(pacing, "SIGNED_IN_PER_HOUR", 0)
     return tmp_path
 
 

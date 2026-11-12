@@ -12,6 +12,7 @@ from tunegrab import video
 from tunegrab.config import Settings
 from tunegrab.download.ytdlp import DownloadError
 from tunegrab.models import TaskStatus
+from tunegrab.pacing import Pacer
 from tunegrab.urls import is_video_link
 from tunegrab.video import (
     VideoDownloader,
@@ -262,7 +263,10 @@ def _pipeline(
 ) -> tuple[VideoPipeline, Any]:
     config = Settings(_env_file=None, output_dir=tmp_path / "lib", **settings)
     job, entries = build_job(_probe(n), VideoOptions())
-    return VideoPipeline(config, VideoOptions(), entries, downloader=stub, retry_backoff=0), job
+    pipeline = VideoPipeline(
+        config, VideoOptions(), entries, downloader=stub, retry_backoff=0, pacer=Pacer(0)
+    )
+    return pipeline, job
 
 
 def test_pipeline_saves_and_skips_existing(tmp_path: Path) -> None:

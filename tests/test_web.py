@@ -139,6 +139,33 @@ def test_song_snapshots_carry_a_rising_revision(client: TestClient) -> None:
     assert second > first
 
 
+def test_rate_limit_pause_shows_and_can_be_ended(
+    client: TestClient, services: FakeServices
+) -> None:
+    from tunegrab.pipeline import RATE_LIMIT_BLOCK_AFTER
+
+    services.downloader.rate_limited_times = RATE_LIMIT_BLOCK_AFTER
+    original = services.pipeline
+
+    def long_pause(on_event: Any = None, settings: Any = None) -> Any:
+        pipeline = original(on_event, settings)
+        pipeline.rate_limit_pause = 0.0
+        pipeline.rate_limit_block = 3600.0
+        return pipeline
+
+    services.pipeline = long_pause  # type: ignore[method-assign]
+    created = client.post("/api/jobs", json={"url": ALBUM}).json()
+    deadline = time.monotonic() + 10
+    while not client.get(f"/api/jobs/{created['id']}").json()["paused_until"]:
+        assert time.monotonic() < deadline, "never paused"
+        time.sleep(0.05)
+    resumed = client.post(f"/api/jobs/{created['id']}/resume")
+    assert resumed.status_code == 200 and resumed.json()["paused_until"] is None
+    job = wait_for(client, created["id"], ("finished",))
+    assert job["counts"]["done"] == 3
+    assert client.post(f"/api/jobs/{created['id']}/resume").status_code == 409
+
+
 def test_events_are_published(client: TestClient) -> None:
     manager = client.app.state.manager  # type: ignore[attr-defined]
     queue = manager.subscribe()

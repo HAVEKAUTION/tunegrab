@@ -17,8 +17,14 @@ from tests.fakes import (
     make_track,
 )
 from tunegrab.library.playlists import read_m3u8
-from tunegrab.models import Job, TaskStatus, Track
-from tunegrab.pipeline import TMP_DIR_NAME, Pipeline
+from tunegrab.models import Job, TaskStatus, Track, TrackTask
+from tunegrab.pacing import Pacer
+from tunegrab.pipeline import (
+    RATE_LIMIT_GAVE_UP,
+    RATE_LIMIT_GIVE_UP_AFTER,
+    TMP_DIR_NAME,
+    Pipeline,
+)
 
 PLAYLIST = f"https://open.spotify.com/playlist/{PLAYLIST_ID}"
 ALBUM = "spotify:album:4m2880jivSbbyEGAKfITCa"
@@ -243,18 +249,75 @@ def test_unavailable_with_no_alternative_fails_without_retrying(tmp_path: Path) 
     assert "Video unavailable" in (task.error or "")
 
 
-def test_rate_limit_pauses_then_retries(tmp_path: Path) -> None:
-    downloader = FakeDownloader(rate_limited_times=1)
-    pipeline, _ = make_pipeline(tmp_path, tracks=[make_track(1)], downloader=downloader, retries=2)
+def test_rate_limit_pauses_then_retries_without_using_a_retry(tmp_path: Path) -> None:
+    downloader = FakeDownloader(rate_limited_times=2)
+    pipeline, _ = make_pipeline(tmp_path, tracks=[make_track(1)], downloader=downloader, retries=0)
     task = run(pipeline, ALBUM).tasks[0]
-    assert task.status == TaskStatus.DONE and task.attempts == 2
+    assert task.status == TaskStatus.DONE and task.attempts == 1
     assert pipeline._cooldown_strikes == 0  # reset by the successful download
 
 
-def test_rate_limit_cooldown_grows_and_is_capped(tmp_path: Path) -> None:
+def test_rate_limit_cooldown_grows_then_blocks_then_gives_up(tmp_path: Path) -> None:
     pipeline, _ = make_pipeline(tmp_path, tracks=[make_track(1)])
     pipeline.rate_limit_pause = 60.0
-    assert [pipeline._rate_limited() for _ in range(5)] == [60.0, 120.0, 240.0, 300.0, 300.0]
+    pipeline.rate_limit_block = 3600.0
+    job = Job(input="x")
+    assert [pipeline._rate_limited(job) for _ in range(4)] == [60.0, 120.0, 3600.0, 3600.0]
+    assert job.paused_until is not None and pipeline.abort_reason is None
+    assert pipeline._rate_limited(job) == 0.0
+    assert pipeline.abort_reason == RATE_LIMIT_GAVE_UP and pipeline.cancel_event.is_set()
+
+
+def test_hour_pause_can_be_ended_early(tmp_path: Path) -> None:
+    pipeline, _ = make_pipeline(tmp_path, tracks=[make_track(1)])
+    pipeline.rate_limit_block = 3600.0
+    job = Job(input="x")
+    assert pipeline.resume() is False  # nothing to resume
+    for _ in range(3):
+        pipeline._rate_limited(job)
+    assert job.paused_until is not None
+    assert pipeline.resume() is True
+    task = TrackTask(track=make_track(1), position=1)
+    pipeline._wait_for_cooldown(job, task)  # returns at once and clears the banner
+    assert job.paused_until is None
+
+
+def test_repeated_rate_limits_stop_the_job_and_leave_songs_retryable(tmp_path: Path) -> None:
+    downloader = FakeDownloader(rate_limited_times=99)
+    pipeline, archive = make_pipeline(
+        tmp_path, tracks=[make_track(1), make_track(2)], downloader=downloader, retries=3
+    )
+    job = run(pipeline, ALBUM)
+    assert downloader.calls == RATE_LIMIT_GIVE_UP_AFTER  # stopped knocking
+    assert statuses(job) == [TaskStatus.FAILED, TaskStatus.FAILED]
+    assert job.error == RATE_LIMIT_GAVE_UP
+    assert len(archive.open_failures()) == 2
+
+
+def test_downloads_are_paced(tmp_path: Path) -> None:
+    clock = [0.0]
+    pacer = Pacer(3600, burst=1, clock=lambda: clock[0])  # one start per second
+    pipeline, _ = make_pipeline(tmp_path, tracks=[make_track(1), make_track(2)])
+    pipeline.pacer = pacer
+    waits: list[float] = []
+    pipeline.cancel_event = WaitRecorder(waits, clock)
+    job = run(pipeline, ALBUM)
+    assert statuses(job) == [TaskStatus.DONE, TaskStatus.DONE]
+    assert waits == [pytest.approx(1.0)]
+
+
+class WaitRecorder(threading.Event):
+    """A cancel event whose wait() advances a fake clock instead of sleeping."""
+
+    def __init__(self, waits: list[float], clock: list[float]) -> None:
+        super().__init__()
+        self.waits, self.clock = waits, clock
+
+    def wait(self, timeout: float | None = None) -> bool:
+        if timeout:
+            self.waits.append(timeout)
+            self.clock[0] += timeout
+        return self.is_set()
 
 
 def test_empty_tmp_folder_is_removed(tmp_path: Path) -> None:

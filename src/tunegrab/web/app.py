@@ -160,6 +160,7 @@ def job_summary(job: Job) -> dict[str, Any]:
         "cancelled": job.cancelled,
         "error": job.error,
         "state": job_state(job),
+        "paused_until": job.paused_until.isoformat() if job.paused_until else None,
     }
 
 
@@ -522,6 +523,13 @@ class JobManager:
             runner = self.services.pipeline(on_event=self._on_event)
         self._spawn(self._run(job, runner))
         return job
+
+    def resume(self, job_id: str) -> None:
+        """End a YouTube rate-limit pause early."""
+        pipeline = self.pipelines.get(job_id)
+        if not isinstance(pipeline, Pipeline) or not pipeline.resume():
+            raise ValueError("This download isn't paused.")
+        self.jobs[job_id].paused_until = None
 
     def cancel(self, job_id: str) -> None:
         job = self.jobs[job_id]
@@ -941,6 +949,15 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
         return job_summary(retried)
+
+    @app.post("/api/jobs/{job_id}/resume")
+    def resume_job(job_id: str) -> dict[str, Any]:
+        job = _job(job_id)
+        try:
+            manager.resume(job_id)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return job_summary(job)
 
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel_job(job_id: str) -> dict[str, Any]:
