@@ -206,7 +206,11 @@ class Pipeline:
         finally:
             if self.cancel_event.is_set() and self.abort_reason is None:
                 job.cancelled = True
-            executor.shutdown(wait=True, cancel_futures=True)
+            # Wait for the workers in a thread: blocking here would freeze the event loop
+            # (and with it the web server) until every download in flight has stopped.
+            await asyncio.shield(
+                loop.run_in_executor(None, lambda: executor.shutdown(True, cancel_futures=True))
+            )
             for task in job.tasks:
                 if self.abort_reason is not None and (
                     not task.status.finished

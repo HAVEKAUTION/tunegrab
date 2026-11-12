@@ -72,6 +72,7 @@ MAX_JOBS = 200  # in memory; older finished jobs stay in the archive's job histo
 SYSTEM_CACHE_S = 60.0
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})
 HEARTBEAT_S = 15.0
+SHUTDOWN_WAIT_S = 15.0  # how long a stopping server lets running songs finish cleanly
 
 
 def unexpected_error(exc: BaseException) -> str:
@@ -644,6 +645,10 @@ def create_app(
         yield
         for pipeline in list(manager.pipelines.values()):
             pipeline.cancel()
+        if manager._background:  # let workers stop and record what they did
+            _done, pending = await asyncio.wait(manager._background, timeout=SHUTDOWN_WAIT_S)
+            if pending:
+                log.warning("%d job(s) still busy at shutdown", len(pending))
         if owned:
             services.close()
 

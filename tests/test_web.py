@@ -425,3 +425,21 @@ def test_startup_warnings_are_shown_and_dismissed(client: TestClient) -> None:
         assert client.get("/api/system").json()["warnings"] == []
     finally:
         config.startup_warnings.clear()
+
+
+def test_shutdown_waits_for_running_downloads(services: FakeServices) -> None:
+    """Stopping the server cancels the job and lets workers finish before the archive
+    closes (no 'closed database' errors, the cancellation is recorded)."""
+    import threading
+
+    block, started = threading.Event(), threading.Event()
+    services.downloader.block, services.downloader.started = block, started
+    with TestClient(create_app(services=services), base_url="http://127.0.0.1:8765") as client:
+        job_id = client.post("/api/jobs", json={"url": ALBUM}).json()["id"]
+        assert started.wait(5)
+        manager = client.app.state.manager  # type: ignore[attr-defined]
+    # leaving the block ran the shutdown: the job ended and the archive still worked for it
+    job = manager.jobs[job_id]
+    assert job.finished_at is not None and job.cancelled
+    assert all(t.status.finished for t in job.tasks)
+    assert services.archive.job_history()[0]["id"] == job_id
