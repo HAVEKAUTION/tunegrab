@@ -11,6 +11,34 @@ All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
   replaces only its own files, records them in `.tunegrab-installed`, and uninstalling leaves
   everything else in place and lists it. Because the install line always fetches the newest
   `install.ps1`, this protects existing 0.4.1 installs on their next update.
+- A job can no longer hang in "running" forever: any unexpected error ends it with a plain
+  message, and one broken video no longer stops a video job.
+- Two songs that finish at the same moment and render to the same file name can't overwrite
+  each other; the second is saved as "name (2)".
+- A song listed twice in one playlist downloads once.
+- A missing music folder or a full disk stops the job once with a clear message (instead of
+  failing every song); Retry picks the songs up once fixed. Settings refuses a music folder
+  TuneGrab can't write to.
+- A broken settings file or download history no longer stops TuneGrab starting: it's set
+  aside with a dated name and the app says so. Your music files are untouched.
+- Stopping the server while downloading lets running songs end cleanly.
+- Songs already in your library are recognised from their tags even if the download history
+  was lost, instead of being downloaded again as "(2)" copies.
+- `tunegrab fix` keeps your old file until the replacement is downloaded; `sync --remove`
+  reports files it can't delete (e.g. open in a player); `login` network errors are a message.
+- Only one "Choose folder" window can be open at a time (a second one crashed the server).
+- Retry retries each failed song once, however many times it's clicked.
+- The Downloads page catches up after a lost connection or server restart, stays responsive
+  on 2,000-song jobs, and no longer shows a song stuck on "Downloading" after it finished.
+- Messages no longer send app users to the command line or `.env`.
+
+### Changed
+- Downloads are paced to stay under YouTube's limit: about 30 back to back, then 250 an hour
+  (1,000 with browser cookies). If YouTube still says "slow down" three times in a job,
+  TuneGrab pauses for an hour (the app shows when it continues, with a Try now button); after
+  five it stops and leaves the songs for Retry. Rate limits no longer use up a song's retries.
+- A song YouTube refuses with every player client now says "YouTube may have changed
+  something: update yt-dlp in Settings, then press Retry".
 
 ## 0.4.1 — 2026-11-13
 
