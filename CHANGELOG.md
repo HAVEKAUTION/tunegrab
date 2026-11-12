@@ -7,7 +7,7 @@ All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
 ### Added
 - One-line Windows installer (`install.ps1`): installs uv, ffmpeg and Deno if missing, the
   latest release, Start-menu and desktop shortcuts; re-run to update, `-Uninstall` to remove.
-- New logo (a music note shaped like a capital T), used in the app, its tab icon and the shortcuts.
+- New logo (a music note), used in the app, its tab icon and the shortcuts.
 - README: demo GIF, project status.
 
 ### Fixed
