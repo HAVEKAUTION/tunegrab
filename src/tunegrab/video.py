@@ -614,6 +614,12 @@ class VideoPipeline:
                 log.warning("video failed: %s: %s", entry.url, exc)
                 self._set(job, task, TaskStatus.FAILED, task.error)
                 return
+            except Exception as exc:  # one broken video must not stop the rest of the job
+                log.exception("video failed unexpectedly: %s", entry.url)
+                task.error = f"Something unexpected went wrong ({type(exc).__name__}: {exc})"
+                task.failed_stage = "downloading"
+                self._set(job, task, TaskStatus.FAILED, task.error)
+                return
 
     def _download(self, job: Job, task: TrackTask, entry: VideoEntry, target: Path) -> None:
         assert self.downloader is not None

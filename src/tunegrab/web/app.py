@@ -72,6 +72,14 @@ LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})
 HEARTBEAT_S = 15.0
 
 
+def unexpected_error(exc: BaseException) -> str:
+    """A user-facing sentence for an error nobody anticipated (the traceback goes to the log)."""
+    detail = str(exc).strip().splitlines()[0][:200] if str(exc).strip() else ""
+    name = type(exc).__name__
+    what = f"{name}: {detail}" if detail else name
+    return f"Something unexpected went wrong ({what}). The details are in the TuneGrab log."
+
+
 class VideoRequest(BaseModel):
     """A video link to download as video (MP4) or audio, optionally only a clip."""
 
@@ -251,6 +259,22 @@ class JobManager:
         task = asyncio.create_task(coro)
         self._background.add(task)
         task.add_done_callback(self._background.discard)
+        task.add_done_callback(self._log_crash)
+
+    @staticmethod
+    def _log_crash(task: asyncio.Task[None]) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            log.error("background job task crashed", exc_info=task.exception())
+
+    def _fail(self, job: Job, message: str) -> None:
+        """End ``job`` with an error: nothing it holds stays queued or running."""
+        job.error = message
+        for task in job.tasks:
+            if not task.status.finished:
+                task.status = TaskStatus.SKIPPED
+                task.message = "stopped"
+        job.finished_at = job.finished_at or job.created_at
+        self._publish("job", job_summary(job))
 
     async def submit(self, request: JobRequest) -> Job:
         self.loop = asyncio.get_running_loop()
@@ -307,17 +331,23 @@ class JobManager:
         return self.services.settings.model_copy(update={"format": fmt})
 
     async def _resolve_and_run(self, job: Job, request: JobRequest) -> None:
-        pipeline = self.services.pipeline(
-            on_event=self._on_event, settings=self._settings_for(request.format)
-        )
         try:
+            pipeline = self.services.pipeline(
+                on_event=self._on_event, settings=self._settings_for(request.format)
+            )
             built = await asyncio.to_thread(self._build, pipeline, request)
             if not built.tasks:
                 raise LookupError("None of the selected tracks were found.")
+        except (KeyError, IndexError) as exc:  # LookupError subclasses that are bugs, not input
+            log.exception("could not resolve %r", job.input)
+            self._fail(job, unexpected_error(exc))
+            return
         except (MetadataError, InvalidURLError, LookupError, ValueError, SearchError) as exc:
-            job.error = str(exc)
-            job.finished_at = job.created_at
-            self._publish("job", job_summary(job))
+            self._fail(job, str(exc))
+            return
+        except Exception as exc:  # a job must always end, never sit in "resolving"
+            log.exception("could not resolve %r", job.input)
+            self._fail(job, unexpected_error(exc))
             return
         job.collection = built.collection
         job.tasks = built.tasks
@@ -360,18 +390,20 @@ class JobManager:
                 raise VideoError("A clip needs a single video, not a playlist.")
             duration = found.entries[0].duration_s if found.kind == "video" else None
             start, end = check_clip(start, end, duration)
+            options = VideoOptions(
+                mode=request.mode,
+                quality=request.quality or self.services.settings.video_quality,
+                start=start,
+                end=end,
+            )
+            built, entries = build_job(found, options)
         except (VideoError, DownloadError) as exc:
-            job.error = str(exc)
-            job.finished_at = job.created_at
-            self._publish("job", job_summary(job))
+            self._fail(job, str(exc))
             return
-        options = VideoOptions(
-            mode=request.mode,
-            quality=request.quality or self.services.settings.video_quality,
-            start=start,
-            end=end,
-        )
-        built, entries = build_job(found, options)
+        except Exception as exc:  # a job must always end, never sit in "resolving"
+            log.exception("could not look up video %r", request.url)
+            self._fail(job, unexpected_error(exc))
+            return
         job.collection, job.tasks = built.collection, built.tasks
         self.video_jobs[job.id] = (options, entries)
         self._publish("job", job_summary(job))
@@ -389,9 +421,7 @@ class JobManager:
                 await pipeline.run(job)
             except Exception as exc:  # never let one job break the manager
                 log.exception("job %s crashed", job.id)
-                job.error = str(exc)
-                job.finished_at = job.finished_at or job.created_at
-                self._publish("job", job_summary(job))
+                self._fail(job, unexpected_error(exc))
             finally:
                 self.pipelines.pop(job.id, None)
                 self._remember(job)

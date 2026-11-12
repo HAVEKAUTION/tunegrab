@@ -336,7 +336,7 @@ def test_update_commands_upgrade_the_lock_in_a_uv_project(
     monkeypatch.setattr(doctor.shutil, "which", lambda name: "uv")
     lock, sync = doctor.update_commands()
     assert lock[:2] == ["uv", "lock"]
-    assert ["--upgrade-package", "yt-dlp"] == lock[2:4]
+    assert lock[2:4] == ["--upgrade-package", "yt-dlp"]
     assert "yt-dlp-ejs" in lock
     assert lock[-2:] == ["--directory", str(tmp_path)]
     assert sync[:2] == ["uv", "sync"]

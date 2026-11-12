@@ -297,3 +297,12 @@ def test_audio_mode_goes_to_the_music_folder(tmp_path: Path) -> None:
     pipeline = VideoPipeline(config, options, {}, downloader=StubDownloader())
     assert pipeline.root == tmp_path / "lib"
     assert final_path(pipeline.root, entry, options, "mp3").name == "Video 0 [vid00000000].mp3"
+
+
+def test_unexpected_error_fails_one_video_and_the_job_continues(tmp_path: Path) -> None:
+    stub = StubDownloader(fail=[KeyError("formats")])
+    pipeline, job = _pipeline(tmp_path, stub, n=2, retries=0)
+    asyncio.run(pipeline.run(job))
+    assert [t.status for t in job.tasks] == [TaskStatus.FAILED, TaskStatus.DONE]
+    assert "KeyError" in (job.tasks[0].error or "")
+    assert job.finished_at is not None

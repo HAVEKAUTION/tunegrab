@@ -340,3 +340,49 @@ def test_storage_endpoints(client: TestClient) -> None:
     assert client.post("/api/storage/clean", json={"keys": ["music"]}).status_code == 400
     done = client.post("/api/storage/clean", json={"keys": ["tmp", "logs"]}).json()
     assert [r["key"] for r in done["results"]] == ["tmp", "logs"]
+
+
+def test_unexpected_resolve_error_ends_the_job(
+    client: TestClient, services: FakeServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Any exception while resolving ends the job; it never sits in "resolving"."""
+    app_manager = client.app.state.manager  # type: ignore[attr-defined]
+
+    def broken(*_: Any) -> Any:
+        raise KeyError("tracks")
+
+    monkeypatch.setattr(app_manager, "_build", broken)
+    created = client.post("/api/jobs", json={"url": ALBUM}).json()
+    job = wait_for(client, created["id"], ("error",))
+    assert "Something unexpected went wrong (KeyError" in job["error"]
+    assert "log" in job["error"]
+    assert not app_manager.busy()
+
+
+def test_unexpected_video_probe_error_ends_the_job(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(url: str, cookies: str | None = None) -> Any:
+        raise TypeError("'NoneType' object is not subscriptable")
+
+    monkeypatch.setattr(web_app, "probe", broken)
+    created = client.post("/api/video", json={"url": "https://youtu.be/dQw4w9WgXcQ"}).json()
+    job = wait_for(client, created["id"], ("error",))
+    assert "TypeError" in job["error"]
+    assert not client.app.state.manager.busy()  # type: ignore[attr-defined]
+
+
+def test_crashing_pipeline_leaves_no_task_running(
+    client: TestClient, services: FakeServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tunegrab.pipeline import Pipeline
+
+    async def broken(self: Pipeline, job: Any) -> Any:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(Pipeline, "run", broken)
+    created = client.post("/api/jobs", json={"url": ALBUM}).json()
+    job = wait_for(client, created["id"], ("error",))
+    assert "RuntimeError: boom" in job["error"]
+    assert {t["status"] for t in job["tasks"]} == {"skipped"}
+    assert not client.app.state.manager.busy()  # type: ignore[attr-defined]
