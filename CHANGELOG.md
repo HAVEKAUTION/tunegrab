@@ -4,6 +4,23 @@ All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
 
 ## Unreleased
 
+### Added
+- **Search finds albums and songs.** Type an album or song ("Discovery Daft Punk", "One More
+  Time") to see matching albums and songs from YouTube Music and tick them into the queue. An
+  artist's name still opens the artist.
+- **Download now names the song it picked** ("One More Time – Daft Punk"); an artist's name
+  opens Browse instead of quietly downloading one of their songs.
+- **Videos are remembered**: video and audio-from-link downloads are in the download history,
+  shown in Library → Videos with Show, skipped when downloaded again with the same options,
+  and failed ones come back in "Retry failed" after a restart.
+- **Show in folder** on every saved song in Downloads.
+- **YouTube sign-in** in Settings (off by default): use a browser's YouTube cookies for
+  age-restricted videos (and 256 kbps audio with Premium), with a clear warning that YouTube
+  can restrict the account used. Age-restricted failures now point to it.
+- **Update notice**: once a day TuneGrab asks GitHub and PyPI whether a newer TuneGrab or
+  yt-dlp is out and shows a dismissible banner (Update yt-dlp is one click). Settings → Updates
+  turns it off.
+
 ### Fixed
 - **The Windows installer could delete your music.** Updating (re-running the install line)
   mirrored the release over the install folder, which deleted the default music folder
@@ -31,6 +48,10 @@ All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
 - The Downloads page catches up after a lost connection or server restart, stays responsive
   on 2,000-song jobs, and no longer shows a song stuck on "Downloading" after it finished.
 - Messages no longer send app users to the command line or `.env`.
+- Retrying a failed song (Retry, Retry failed after a restart, the link fix, video retries)
+  uses the format the job was started with, not the current default.
+- "Use a YouTube link" no longer appears on failed videos.
+- The queue bar says "1 song", not "1 songs"; Settings fields line up when only one has help.
 
 ### Changed
 - Downloads are paced to stay under YouTube's limit: about 30 back to back, then 250 an hour
@@ -39,6 +60,17 @@ All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
   five it stops and leaves the songs for Retry. Rate limits no longer use up a song's retries.
 - A song YouTube refuses with every player client now says "YouTube may have changed
   something: update yt-dlp in Settings, then press Retry".
+- **New installs save music to `~/Music/TuneGrab`** and use **M4A** (YouTube's original
+  audio, no re-encode). Existing users keep their music folder and MP3: both are saved to the
+  settings file the first time this version runs.
+- MP3 without a chosen bitrate is now VBR V0 (about 245 kbps): sounds the same as 320 for
+  YouTube audio and is smaller. A chosen bitrate stays constant.
+- Format labels say what each one does: "M4A · original quality", "Opus · original quality,
+  smallest", "MP3 · re-encoded, for old players".
+- The download history upgrades itself (format 3) and keeps a copy of the old file
+  (`tunegrab.db.bak-v<n>`) first; a newer history than this version knows is refused.
+- Under the hood: one error type, a shared task runner for songs and videos, the web server
+  and page split into smaller files, dead code removed.
 
 ## 0.4.1 — 2026-11-13
 
