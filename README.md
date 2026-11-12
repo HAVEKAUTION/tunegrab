@@ -402,6 +402,8 @@ and so does a single **Track URI** column of Spotify links. From a terminal:
 
 <br>
 
+Music is saved to **Music\TuneGrab** in your user folder unless you pick another one.
+(If you used TuneGrab 0.4 or older, it keeps using the `downloads` folder it used before.)
 **Settings → Music folder → Choose…** opens a folder picker. Press **Save**. File naming,
 format, quality, lyrics and how many songs download at once are on the same screen.
 
@@ -470,7 +472,7 @@ setting and where its value came from.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `output_dir` | `./downloads` | Music folder |
+| `output_dir` | `~/Music/TuneGrab` | Music folder (installs from 0.4.x keep their `downloads` folder) |
 | `format` | `mp3` | `mp3`, `m4a`, `opus` or `flac` |
 | `bitrate` | `320` | MP3 quality in kbps |
 | `threads` | `4` | Songs downloaded at once (1–16) |
@@ -648,8 +650,16 @@ Also check Deno is installed (`deno --version`).
 
 <br>
 
-TuneGrab pauses downloads for a minute when YouTube asks this, then carries on. If it
-keeps happening, turn off any VPN, lower **Songs at once**, or use your browser's cookies:
+YouTube limits how many videos one connection can fetch (roughly 300 an hour without
+signing in). TuneGrab stays under that: big jobs start at full speed, then slow to about 250
+songs an hour. If YouTube still says "slow down", TuneGrab waits a minute, then two; the
+third time in a job it pauses for an hour (YouTube's block lasts about that long) and shows
+when it will continue, with a **Try now** button. After five it stops and leaves the songs
+for **Retry**.
+
+If it keeps happening, turn off any VPN. Using your browser's cookies raises the limit, but
+YouTube can restrict the Google account used, so only do it with an account you can afford
+to lose access to:
 
 ```powershell
 uv run tunegrab config set cookies_from_browser firefox

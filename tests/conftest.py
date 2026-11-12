@@ -33,6 +33,9 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         if key.startswith("SPOTIFY_") or (key.startswith("TUNEGRAB_") and key not in _KEEP):
             monkeypatch.delenv(key, raising=False)
     monkeypatch.chdir(tmp_path)
+    home = tmp_path / "_home"  # Path.home(): the default music folder lives under it
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOME", str(home))
     # no YouTube pacing in tests (tests/test_pacing.py covers it with a fake clock)
     from tunegrab import pacing
 

@@ -11,6 +11,7 @@ import contextlib
 import json
 import logging
 import os
+import sqlite3
 import tomllib
 from datetime import datetime
 from pathlib import Path
@@ -147,7 +148,9 @@ class Settings(BaseSettings):
         validate_default=True,
     )
 
-    output_dir: Path = Path("downloads")
+    # None: ~/Music/TuneGrab. A relative path is relative to your home folder (never to
+    # wherever TuneGrab happened to be started from).
+    output_dir: Path | None = None
     format: AudioFormat = "mp3"
     bitrate: int = Field(default=320, ge=32, le=320)  # kbps, mp3 only
     track_template: str = DEFAULT_TRACK_TEMPLATE
@@ -212,7 +215,10 @@ class Settings(BaseSettings):
 
     @property
     def resolved_output_dir(self) -> Path:
-        return self.output_dir.expanduser().resolve()
+        if self.output_dir is None:
+            return default_music_dir()
+        folder = self.output_dir.expanduser()
+        return (folder if folder.is_absolute() else Path.home() / folder).resolve()
 
     @property
     def resolved_video_dir(self) -> Path:
@@ -224,6 +230,68 @@ class Settings(BaseSettings):
 # --- reading / writing config.toml -------------------------------------------
 
 SETTABLE_KEYS: tuple[str, ...] = tuple(Settings.model_fields)
+
+
+def default_music_dir() -> Path:
+    """Where a fresh install saves music."""
+    return (Path.home() / "Music" / "TuneGrab").resolve()
+
+
+# 0.4.x saved music to "downloads" next to wherever TuneGrab was started (the install
+# folder, for the launcher and installer).
+LEGACY_OUTPUT_DIR = "downloads"
+
+
+def _history_has_downloads(archive: Path) -> bool:
+    if not archive.is_file():
+        return False
+    try:
+        conn = sqlite3.connect(f"file:{archive.as_posix()}?mode=ro", uri=True)
+        try:
+            return conn.execute("SELECT 1 FROM downloads LIMIT 1").fetchone() is not None
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+
+
+def pin_music_folder(settings: Settings) -> Settings:
+    """Keep existing users' music where it is when the default folder changes (C1).
+
+    * A relative ``output_dir`` saved by 0.4.x meant "relative to where TuneGrab was
+      started": it is rewritten once as the absolute folder it pointed to.
+    * No saved folder, but a download history with songs (or a non-empty ``downloads``
+      folder here): that old default is saved, so it never changes under the user.
+    * Otherwise (a fresh install) nothing is saved and ~/Music/TuneGrab is used.
+    """
+    try:
+        saved = read_config_file()
+    except (OSError, tomllib.TOMLDecodeError):
+        return settings  # recover_config_file() reports a broken file
+    cwd = Path.cwd()
+    if "output_dir" in saved:
+        folder = Path(str(saved["output_dir"])).expanduser()
+        if folder.is_absolute():
+            return settings
+        pinned = (cwd / folder).resolve()
+        write_config_file({**saved, "output_dir": str(pinned)})
+        log.info("music folder %s saved as %s", folder, pinned)
+        if settings.output_dir == Path(str(saved["output_dir"])):
+            return settings.model_copy(update={"output_dir": pinned})
+        return settings
+    if "output_dir" in settings.model_fields_set:
+        return settings  # chosen for this run (environment or a command-line option)
+    legacy = cwd / LEGACY_OUTPUT_DIR
+    try:
+        legacy_used = legacy.is_dir() and any(legacy.iterdir())
+    except OSError:
+        legacy_used = False
+    if not (legacy_used or _history_has_downloads(settings.resolved_archive_path)):
+        return settings
+    pinned = legacy.resolve()
+    write_config_file({**saved, "output_dir": str(pinned)})
+    log.info("kept the music folder of an earlier version: %s", pinned)
+    return settings.model_copy(update={"output_dir": pinned})
 
 
 def read_config_file(path: Path | None = None) -> dict[str, Any]:

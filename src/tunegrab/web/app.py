@@ -26,6 +26,7 @@ from tunegrab.config import (
     coerce_setting,
     config_file,
     log_dir,
+    pin_music_folder,
     read_config_file,
     startup_warnings,
     write_config_file,
@@ -165,7 +166,7 @@ def create_app(
     allowed_hosts: set[str] | None = None,
 ) -> FastAPI:
     owned = services is None
-    services = services or build_services(settings or Settings())
+    services = services or build_services(settings or pin_music_folder(Settings()))
     manager = JobManager(services)
 
     @asynccontextmanager

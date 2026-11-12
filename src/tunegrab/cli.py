@@ -31,6 +31,7 @@ from tunegrab.config import (
     coerce_setting,
     config_file,
     keyring_set,
+    pin_music_folder,
     read_config_file,
     startup_warnings,
     write_config_file,
@@ -133,8 +134,11 @@ def _fail(message: str, code: int = 1) -> typer.Exit:
 
 def load_settings(**overrides: Any) -> Settings:
     values = {k: v for k, v in overrides.items() if v is not None}
+    for key in ("output_dir", "video_dir"):  # a folder typed in a shell is relative to it
+        if key in values:
+            values[key] = Path(values[key]).expanduser().resolve()
     try:
-        settings = Settings(**values)
+        settings = pin_music_folder(Settings(**values))
         validate_template(settings.track_template)
         validate_template(settings.playlist_template)
     except TemplateError as exc:

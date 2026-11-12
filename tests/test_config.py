@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,7 @@ from tunegrab.config import (
     Settings,
     coerce_setting,
     config_file,
+    pin_music_folder,
     read_config_file,
     write_config_file,
 )
@@ -101,3 +103,59 @@ def test_unreadable_config_file_is_set_aside(
     assert len(kept) == 1 and "threads = = 2" in kept[0].read_text(encoding="utf-8")
     assert not (tmp_path / "config.toml").exists()
     assert len(config.startup_warnings) == 1 and str(kept[0]) in config.startup_warnings[0]
+
+
+# --- music folder default (C1) ------------------------------------------------------------
+def test_fresh_profile_uses_music_folder_in_home(tmp_path: Path) -> None:
+    settings = pin_music_folder(Settings(_env_file=None))
+    assert settings.resolved_output_dir == (Path.home() / "Music" / "TuneGrab").resolve()
+    assert read_config_file() == {}  # nothing pinned for a fresh install
+
+
+def test_saved_folder_is_kept(tmp_path: Path) -> None:
+    chosen = tmp_path / "My Music"
+    write_config_file({"output_dir": str(chosen)})
+    settings = pin_music_folder(Settings(_env_file=None))
+    assert settings.resolved_output_dir == chosen.resolve()
+    assert read_config_file() == {"output_dir": str(chosen)}
+
+
+def test_upgrade_with_history_pins_the_old_downloads_folder(tmp_path: Path) -> None:
+    from tests.fakes import make_track
+    from tunegrab.library.archive import Archive
+
+    old = Settings(_env_file=None, output_dir=tmp_path / "downloads")
+    with Archive(old.resolved_archive_path) as archive:
+        archive.record_download(make_track(1), tmp_path / "downloads" / "a.mp3", "x", "mp3")
+    settings = pin_music_folder(Settings(_env_file=None))  # cwd is tmp_path (conftest)
+    expected = (tmp_path / "downloads").resolve()
+    assert settings.resolved_output_dir == expected
+    assert read_config_file() == {"output_dir": str(expected)}
+    # and it never changes again, wherever TuneGrab is started from
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    os.chdir(elsewhere)
+    assert pin_music_folder(Settings(_env_file=None)).resolved_output_dir == expected
+
+
+def test_upgrade_without_history_but_with_music_pins_too(tmp_path: Path) -> None:
+    (tmp_path / "downloads" / "Artist").mkdir(parents=True)
+    settings = pin_music_folder(Settings(_env_file=None))
+    assert settings.resolved_output_dir == (tmp_path / "downloads").resolve()
+
+
+def test_relative_saved_folder_is_made_absolute_once(tmp_path: Path) -> None:
+    write_config_file({"output_dir": "songs", "threads": 2})
+    settings = pin_music_folder(Settings(_env_file=None))
+    expected = (tmp_path / "songs").resolve()
+    assert settings.resolved_output_dir == expected
+    assert read_config_file() == {"output_dir": str(expected), "threads": 2}
+
+
+def test_relative_folder_never_depends_on_the_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TUNEGRAB_OUTPUT_DIR", "Tunes")
+    settings = pin_music_folder(Settings(_env_file=None))
+    assert settings.resolved_output_dir == (Path.home() / "Tunes").resolve()
+    assert read_config_file() == {}  # an environment choice isn't written anywhere

@@ -283,6 +283,6 @@ def run_all(settings: Settings) -> list[CheckResult]:
         check_js_runtime(),
         check_ytdlp(),
         check_ejs(),
-        check_output_dir(settings.output_dir),
+        check_output_dir(settings.resolved_output_dir),
         check_spotify_credentials(settings),
     ]
