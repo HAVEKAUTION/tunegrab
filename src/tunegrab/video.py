@@ -50,6 +50,7 @@ from tunegrab.download.ytdlp import (
 )
 from tunegrab.library.paths import move_into_place, sanitize_segment
 from tunegrab.models import Collection, Job, TaskStatus, Track, TrackTask
+from tunegrab.preflight import DISK_FULL, check_folder, is_disk_full
 
 log = logging.getLogger(__name__)
 
@@ -538,6 +539,7 @@ class VideoPipeline:
     on_event: EventCallback | None = None
     retry_backoff: float = 2.0
     cancel_event: threading.Event = field(default_factory=threading.Event)
+    abort_reason: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if self.downloader is None:
@@ -571,15 +573,23 @@ class VideoPipeline:
         self._emit(job, task)
 
     async def run(self, job: Job) -> Job:
+        """Raises :class:`~tunegrab.preflight.JobAborted` if the folder is unusable."""
+        check_folder(self.root, "music folder" if self.options.mode == "audio" else "video folder")
         self._emit(job)
         for task in job.tasks:
+            if self.abort_reason is not None:
+                task.error = f"Not downloaded: {self.abort_reason}"
+                self._set(job, task, TaskStatus.FAILED, task.error)
+                continue
             if self.cancel_event.is_set() or job.cancelled:
                 self._set(job, task, TaskStatus.SKIPPED, "cancelled")
                 continue
             await asyncio.to_thread(self._process, job, task)
         with contextlib.suppress(OSError):
             (self.root / TMP_DIR_NAME).rmdir()
-        job.cancelled = job.cancelled or self.cancel_event.is_set()
+        if self.abort_reason is not None:
+            job.error = self.abort_reason
+        job.cancelled = job.cancelled or (self.cancel_event.is_set() and self.abort_reason is None)
         job.finished_at = datetime.now(UTC)
         self._emit(job)
         return job
@@ -602,6 +612,9 @@ class VideoPipeline:
                 self._set(job, task, TaskStatus.SKIPPED, "cancelled")
                 return
             except (DownloadError, OSError) as exc:
+                if is_disk_full(exc):
+                    self._abort(job, task, entry)
+                    return
                 kind = exc.kind if isinstance(exc, DownloadError) else "other"
                 if attempt < attempts and kind != "unavailable":
                     log.info("retrying video %s after: %s", entry.url, exc)
@@ -620,6 +633,13 @@ class VideoPipeline:
                 task.failed_stage = "downloading"
                 self._set(job, task, TaskStatus.FAILED, task.error)
                 return
+
+    def _abort(self, job: Job, task: TrackTask, entry: VideoEntry) -> None:
+        log.warning("stopping the video job: disk full (%s)", entry.url)
+        self.abort_reason = DISK_FULL
+        task.error = DISK_FULL
+        task.failed_stage = "downloading"
+        self._set(job, task, TaskStatus.FAILED, task.error)
 
     def _download(self, job: Job, task: TrackTask, entry: VideoEntry, target: Path) -> None:
         assert self.downloader is not None

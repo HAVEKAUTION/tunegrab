@@ -31,6 +31,7 @@ from tunegrab.library.playlists import playlist_file, write_m3u8
 from tunegrab.matching.matcher import Matcher
 from tunegrab.metadata.resolver import Resolver
 from tunegrab.models import Candidate, Collection, Job, Match, TaskStatus, Track, TrackTask
+from tunegrab.preflight import DISK_FULL, check_folder, is_disk_full
 from tunegrab.tagging.lyrics import Lyrics, write_lrc
 from tunegrab.urls import is_spotify_input
 
@@ -91,6 +92,8 @@ class Pipeline:
     _cooldown_until: float = field(default=0.0, init=False, repr=False)
     _cooldown_strikes: int = field(default=0, init=False, repr=False)
     _cooldown_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    # Set when the whole job must stop (e.g. the disk is full); a sentence for the user.
+    abort_reason: str | None = field(default=None, init=False)
 
     # --- building jobs -------------------------------------------------------------
     def build_job(self, text: str) -> Job:
@@ -125,6 +128,14 @@ class Pipeline:
     def cancel(self) -> None:
         self.cancel_event.set()
 
+    def abort(self, reason: str) -> None:
+        """Stop the whole job because of ``reason`` (the songs not done are failed, so
+        Retry picks them up once the cause is fixed)."""
+        if self.abort_reason is None:
+            self.abort_reason = reason
+            log.warning("stopping the job: %s", reason)
+        self.cancel_event.set()
+
     @property
     def output_dir(self) -> Path:
         return self.settings.resolved_output_dir
@@ -154,7 +165,10 @@ class Pipeline:
         return root
 
     async def run(self, job: Job) -> Job:
-        """Run every task of ``job``; returns the same job with statuses filled in."""
+        """Run every task of ``job``; returns the same job with statuses filled in.
+
+        Raises :class:`~tunegrab.preflight.JobAborted` if the music folder is unusable."""
+        check_folder(self.output_dir)
         tmp_root = self._clean_stale_tmp()
         collection = job.collection
         if (
@@ -190,13 +204,20 @@ class Pipeline:
             job.cancelled = True
             raise
         finally:
-            if self.cancel_event.is_set():
+            if self.cancel_event.is_set() and self.abort_reason is None:
                 job.cancelled = True
             executor.shutdown(wait=True, cancel_futures=True)
             for task in job.tasks:
-                if not task.status.finished:
+                if self.abort_reason is not None and (
+                    not task.status.finished
+                    or (task.status == TaskStatus.SKIPPED and task.message == "cancelled")
+                ):
+                    self._fail_task(job, task, f"Not downloaded: {self.abort_reason}")
+                elif not task.status.finished:
                     task.status = TaskStatus.SKIPPED
                     task.message = "cancelled"
+            if self.abort_reason is not None:
+                job.error = self.abort_reason
             self._finish_playlist(job)
             with contextlib.suppress(OSError):  # only if empty: no stray folder in the library
                 tmp_root.rmdir()
@@ -292,7 +313,7 @@ class Pipeline:
                 except (Cancelled, DownloadCancelled):
                     raise
                 except Exception as exc:
-                    if attempt == attempts:
+                    if attempt == attempts or is_disk_full(exc):
                         raise TaskFailed(str(exc) or type(exc).__name__) from exc
                     log.info("retrying %s after: %s", task.track.display, exc)
                 task.message = f"retry {attempt}/{attempts - 1}"
@@ -302,17 +323,24 @@ class Pipeline:
         except (Cancelled, DownloadCancelled):
             self._set(job, task, TaskStatus.SKIPPED, "cancelled")
         except Exception as exc:
-            stage = task.status.value if not task.status.finished else None
-            task.failed_stage = stage
-            task.error = str(exc) or type(exc).__name__
-            log.warning("failed: %s at %s: %s", task.track.display, stage, task.error)
-            try:
-                self.archive.record_failure(
-                    job.input, job.collection, task.position, task.track, stage, task.error
-                )
-            except Exception:
-                log.exception("could not record failure")
-            self._set(job, task, TaskStatus.FAILED, task.error)
+            if is_disk_full(exc):
+                self.abort(DISK_FULL)
+            self._fail_task(
+                job, task, DISK_FULL if is_disk_full(exc) else str(exc) or type(exc).__name__
+            )
+
+    def _fail_task(self, job: Job, task: TrackTask, error: str) -> None:
+        stage = task.status.value if not task.status.finished else None
+        task.failed_stage = stage
+        task.error = error
+        log.warning("failed: %s at %s: %s", task.track.display, stage, task.error)
+        try:
+            self.archive.record_failure(
+                job.input, job.collection, task.position, task.track, stage, task.error
+            )
+        except Exception:
+            log.exception("could not record failure")
+        self._set(job, task, TaskStatus.FAILED, task.error)
 
     def _skip_existing(self, job: Job, task: TrackTask) -> bool:
         existing = self.archive.downloaded_path(task.track.key)

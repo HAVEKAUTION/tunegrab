@@ -42,6 +42,7 @@ from tunegrab.matching.base import SearchError
 from tunegrab.metadata.base import MetadataError, NotFoundError
 from tunegrab.models import Candidate, Collection, Job, Match, TaskStatus, Track, TrackTask
 from tunegrab.pipeline import Pipeline
+from tunegrab.preflight import JobAborted
 from tunegrab.services import Services, build_services
 from tunegrab.urls import (
     InvalidURLError,
@@ -419,6 +420,8 @@ class JobManager:
                 return
             try:
                 await pipeline.run(job)
+            except JobAborted as exc:
+                self._fail(job, str(exc))
             except Exception as exc:  # never let one job break the manager
                 log.exception("job %s crashed", job.id)
                 self._fail(job, unexpected_error(exc))

@@ -386,3 +386,15 @@ def test_crashing_pipeline_leaves_no_task_running(
     assert "RuntimeError: boom" in job["error"]
     assert {t["status"] for t in job["tasks"]} == {"skipped"}
     assert not client.app.state.manager.busy()  # type: ignore[attr-defined]
+
+
+def test_unusable_music_folder_ends_the_job_with_a_clear_message(
+    client: TestClient, services: FakeServices, tmp_path: Path
+) -> None:
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x")
+    services.settings = services.settings.model_copy(update={"output_dir": blocker / "music"})
+    created = client.post("/api/jobs", json={"url": ALBUM}).json()
+    job = wait_for(client, created["id"], ("error",))
+    assert job["error"].startswith("Your music folder") and "Settings" in job["error"]
+    assert not client.app.state.manager.busy()  # type: ignore[attr-defined]

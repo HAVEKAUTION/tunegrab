@@ -46,6 +46,7 @@ from tunegrab.matching.ytmusic import track_from_candidate
 from tunegrab.metadata.base import MetadataError
 from tunegrab.models import Candidate, Collection, Job, Match, TaskStatus, Track, TrackTask
 from tunegrab.pipeline import Pipeline, run_job_sync
+from tunegrab.preflight import JobAborted
 from tunegrab.services import Services, build_services
 from tunegrab.ui import (
     LiveProgress,
@@ -218,6 +219,11 @@ def run_jobs(services: Services, builders: list[tuple[str, Any]]) -> list[Job]:
             display.start_job(job)
             try:
                 run_job_sync(pipeline, job)
+            except JobAborted as exc:
+                job.error = str(exc)
+                console.print(f"[red]Error:[/] {escape(str(exc))}")
+                finished.append(job)
+                break
             except KeyboardInterrupt:
                 interrupted = True
                 pipeline.cancel()
@@ -417,6 +423,8 @@ def video(
         display.start_job(job)
         try:
             asyncio.run(pipeline.run(job))
+        except JobAborted as exc:
+            raise _fail(str(exc)) from exc
         except KeyboardInterrupt:
             pipeline.cancel()
             console.print("[yellow]Interrupted.[/]")
