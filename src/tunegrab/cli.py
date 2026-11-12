@@ -39,7 +39,8 @@ from tunegrab.doctor import CheckResult, Status, run_all, update_ytdlp
 from tunegrab.download.convert import FORMAT_HELP
 from tunegrab.download.ytdlp import DownloadError
 from tunegrab.imports import CsvImportError, collection_from_csv
-from tunegrab.library.paths import TemplateError, validate_template
+from tunegrab.library.archive import DownloadRecord
+from tunegrab.library.paths import TemplateError, move_into_place, validate_template
 from tunegrab.library.playlists import playlist_file
 from tunegrab.logs import setup_logging
 from tunegrab.matching.base import SearchError
@@ -645,14 +646,24 @@ def sync(
                 console.print("Re-run with [bold]--remove[/] to delete these files.")
             raise typer.Exit(_exit_code(jobs))
         if deletable and (yes or typer.confirm(f"Delete {len(deletable)} file(s)?", default=False)):
+            deleted: set[str] = set()
             for path, key in deletable:
-                path.unlink(missing_ok=True)
-                path.with_suffix(".lrc").unlink(missing_ok=True)
+                try:
+                    path.unlink(missing_ok=True)
+                    path.with_suffix(".lrc").unlink(missing_ok=True)
+                except OSError as exc:
+                    console.print(
+                        f"[red]Couldn't delete[/] {escape(str(path))}: {exc.strerror or exc}"
+                    )
+                    continue
                 services.archive.forget_download(key)
-            deleted = {key for _, key in deletable}
+                deleted.add(key)
             left = [t.model_dump(mode="json") for t in gone if t.key not in deleted]
             services.archive.set_meta(pending_key, left or None)
-            console.print(f"Deleted {len(deletable)} file(s).")
+            console.print(f"Deleted {len(deleted)} of {len(deletable)} file(s).")
+            if len(deleted) < len(deletable):
+                console.print("Close any program using the others and run sync again.")
+                raise typer.Exit(1)
             if settings.playlist_mode == "m3u":
                 pipeline.write_playlist_file(playlist_id)
     raise typer.Exit(_exit_code(jobs))
@@ -741,24 +752,71 @@ def fix(
         console.print(
             f"Saved: {escape(track.display)} -> {candidate.url} ([dim]{escape(candidate.title)}[/])"
         )
-        record = services.archive.get_download(track.key)
-        if record is not None and record.exists:
-            if yes or typer.confirm(f"Replace the existing file {record.path}?", default=True):
-                record.path.unlink(missing_ok=True)
-                record.path.with_suffix(".lrc").unlink(missing_ok=True)
-                services.archive.forget_download(track.key)
-            else:
-                download_now = False
         if not download_now:
             return
+        record = services.archive.get_download(track.key)
+        if record is not None and not record.exists:
+            record = None
+        if record is not None and not (
+            yes or typer.confirm(f"Replace the existing file {record.path}?", default=True)
+        ):
+            return
+        # Keep the old file aside until the new one is safely in place.
+        old = _set_aside_for_replacement(record) if record is not None else None
+        if old is not None:
+            services.archive.forget_download(track.key)
         selected = Match(track=track, candidate=candidate, score=100.0, reason="manual override")
         job = Job(
             input=spotify_url,
             collection=Collection(kind="track", id=ref.id, name=track.display, tracks=[track]),
             tasks=[TrackTask(track=track, position=1, match=selected)],
         )
-        jobs = run_jobs(services, [(track.display, job)])
+        try:
+            jobs = run_jobs(services, [(track.display, job)])
+        finally:
+            if old is not None and record is not None:
+                _finish_replacement(services, record, old, job.tasks[0].status)
     raise typer.Exit(_exit_code(jobs))
+
+
+def _set_aside_for_replacement(record: DownloadRecord) -> list[tuple[Path, Path]]:
+    """Rename the old song (and its .lrc) to a hidden backup name; returns the moves."""
+    moves: list[tuple[Path, Path]] = []
+    for path in (record.path, record.path.with_suffix(".lrc")):
+        if not path.exists():
+            continue
+        backup = path.with_name(f".{path.name}.tunegrab-old")
+        try:
+            path.replace(backup)
+        except OSError as exc:
+            for original, moved in moves:  # put back what was already moved
+                moved.replace(original)
+            raise _fail(
+                f"Couldn't replace {path}: {exc.strerror or exc}. If it's open in a player, "
+                "close it and try again."
+            ) from exc
+        moves.append((path, backup))
+    return moves
+
+
+def _finish_replacement(
+    services: Services, record: DownloadRecord, moves: list[tuple[Path, Path]], status: TaskStatus
+) -> None:
+    """Delete the backup after a successful replacement, or restore it after a failure."""
+    if status == TaskStatus.DONE:
+        for _original, backup in moves:
+            try:
+                backup.unlink(missing_ok=True)
+            except OSError as exc:
+                console.print(f"[yellow]Note:[/] couldn't remove {escape(str(backup))}: {exc}")
+        return
+    for original, backup in moves:
+        try:
+            move_into_place(backup, original)
+        except OSError as exc:
+            console.print(f"[red]Your old file is at {escape(str(backup))}[/] ({exc}).")
+    services.archive.record_download(record.track, record.path, record.video_id, record.format)
+    console.print("The new version wasn't downloaded; your old file is back in place.")
 
 
 @app.command()
@@ -801,7 +859,7 @@ def status() -> None:
 def login() -> None:
     """Log in to Spotify (PKCE) for private playlists and Liked Songs."""
     from tunegrab.metadata.spotify_api import login as spotify_login
-    from tunegrab.net import get_client
+    from tunegrab.net import NetworkError, get_client
 
     settings = load_settings()
     try:
@@ -812,6 +870,8 @@ def login() -> None:
                 f"Opening your browser to log in. If nothing happens, open:\n{u}"
             ),
         )
+    except NetworkError as exc:
+        raise _fail(f"Couldn't reach Spotify: {exc}. Check your connection and try again.") from exc
     except (MetadataError, RuntimeError, OSError) as exc:
         raise _fail(str(exc)) from exc
     console.print("[green]Logged in.[/] Private playlists and Liked Songs are now available.")

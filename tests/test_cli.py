@@ -187,7 +187,7 @@ def test_sync_lists_then_removes(services: dict[str, Any], tmp_path: Path) -> No
     no = invoke("sync", PLAYLIST, "--remove", input="n\n")
     assert no.exit_code == 0 and len(files(tmp_path)) == 5
     yes = invoke("sync", PLAYLIST, "--remove", "--yes")
-    assert "Deleted 2 file(s)" in yes.output, yes.output
+    assert "Deleted 2 of 2 file(s)" in yes.output, yes.output
     remaining = files(tmp_path)
     assert remaining == [
         "Artist 1/Album 1 (2020)/01 - Song 1.mp3",
@@ -218,6 +218,92 @@ def test_fix_overrides_and_redownloads(services: dict[str, Any], tmp_path: Path)
     record = svc.archive.get_download(track.key)
     assert record and record.video_id == "dQw4w9WgXcQ" and record.exists
     assert len(files(tmp_path)) == 1  # old file replaced, not duplicated
+
+
+def test_fix_keeps_the_old_file_when_the_new_download_fails(
+    services: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    track: Track = make_track(1)
+    services["tracks"] = [track]
+    invoke("download", f"spotify:track:{track.spotify_id}")
+    [old] = files(tmp_path)
+    old_bytes = (tmp_path / "lib" / old).read_bytes()
+    build = cli.build_services
+
+    def broken(settings: Settings, http: Any = None) -> FakeServices:
+        svc = build(settings, http)
+        svc.downloader.unavailable.add("dQw4w9WgXcQ")
+        return svc
+
+    monkeypatch.setattr(cli, "build_services", broken)
+    result = invoke(
+        "fix", f"spotify:track:{track.spotify_id}", "https://youtu.be/dQw4w9WgXcQ", "--yes"
+    )
+    assert result.exit_code == 1
+    assert "old file is back in place" in result.output
+    assert files(tmp_path) == [old]  # no leftover backup, nothing lost
+    assert (tmp_path / "lib" / old).read_bytes() == old_bytes
+    svc = services["made"][-1]
+    svc.archive = Archive(svc.archive.path)
+    record = svc.archive.get_download(track.key)
+    assert record is not None and record.exists  # still known as downloaded
+
+
+def test_fix_reports_a_locked_old_file(
+    services: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    track: Track = make_track(1)
+    services["tracks"] = [track]
+    invoke("download", f"spotify:track:{track.spotify_id}")
+    [old] = files(tmp_path)
+
+    def locked(self: Path, target: Any) -> Path:
+        raise PermissionError(13, "The file is in use", str(self))
+
+    monkeypatch.setattr(Path, "replace", locked)
+    result = invoke(
+        "fix", f"spotify:track:{track.spotify_id}", "https://youtu.be/dQw4w9WgXcQ", "--yes"
+    )
+    assert result.exit_code == 1 and "close it and try again" in result.output
+    assert "Traceback" not in result.output
+    assert files(tmp_path) == [old]
+
+
+def test_sync_remove_reports_locked_files(
+    services: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    services["tracks"] = [make_track(1), make_track(2)]
+    assert invoke("sync", PLAYLIST).exit_code == 0
+    services["tracks"] = [make_track(1)]
+    invoke("sync", PLAYLIST)
+    real_unlink = Path.unlink
+
+    def unlink(self: Path, missing_ok: bool = False) -> None:
+        if self.suffix == ".mp3":
+            raise PermissionError(13, "The file is in use", str(self))
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    result = invoke("sync", PLAYLIST, "--remove", "--yes")
+    assert result.exit_code == 1, result.output
+    assert "Couldn't delete" in result.output and "Deleted 0 of 1" in result.output
+    assert "Traceback" not in result.output
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    retry = invoke("sync", PLAYLIST, "--remove", "--yes")  # still pending, works once closed
+    assert retry.exit_code == 0 and "Deleted 1 of 1" in retry.output, retry.output
+
+
+def test_login_network_failure_is_a_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tunegrab.metadata import spotify_api
+    from tunegrab.net import NetworkError
+
+    def offline(*args: Any, **kwargs: Any) -> None:
+        raise NetworkError("connection refused")
+
+    monkeypatch.setattr(spotify_api, "login", offline)
+    result = invoke("login")
+    assert result.exit_code == 1 and "Couldn't reach Spotify" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_fix_validates_input(services: dict[str, Any]) -> None:
