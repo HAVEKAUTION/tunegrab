@@ -44,6 +44,7 @@ from tunegrab.download.ytdlp import (
     base_options,
     classify_error,
     clean_error,
+    describe_failure,
     extract,
     run_ladder,
     source_info,
@@ -622,7 +623,7 @@ class VideoPipeline:
                         self._set(job, task, TaskStatus.SKIPPED, "cancelled")
                         return
                     continue
-                task.error = str(exc)
+                task.error = describe_failure(exc)
                 task.failed_stage = "downloading"
                 log.warning("video failed: %s: %s", entry.url, exc)
                 self._set(job, task, TaskStatus.FAILED, task.error)

@@ -93,6 +93,24 @@ class DownloadError(Exception):
         self.kind: ErrorKind = kind or classify_error(message)
 
 
+# Shown when every player client was refused: almost always YouTube changed its player and
+# yt-dlp needs a release to catch up (02b_YOUTUBE_CONSTRAINTS.md, measure 1).
+BREAKAGE_HINT = "YouTube may have changed something: update yt-dlp in Settings, then press Retry."
+
+
+def describe_failure(exc: BaseException) -> str:
+    """The sentence shown for a failed download, with the fix when YouTube refused it."""
+    message = str(exc) or type(exc).__name__
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, DownloadError) and current.kind == "blocked":
+            return f"YouTube refused this download ({current}). {BREAKAGE_HINT}"
+        current = current.__cause__
+    return message
+
+
 class DownloadCancelled(DownloadError):
     """The user cancelled (Ctrl+C) while downloading."""
 

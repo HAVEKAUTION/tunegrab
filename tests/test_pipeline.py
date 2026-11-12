@@ -319,3 +319,24 @@ def test_failed_history_write_keeps_the_song(
     again = run(pipeline, ALBUM)
     assert statuses(again) == [TaskStatus.SKIPPED]
     assert [p.name for p in library_files(tmp_path)] == ["01 - Song 1.mp3"]  # no "(2)" copy
+
+
+class RefusedDownloader(FakeDownloader):
+    """Every player client was refused (what a YouTube player change looks like)."""
+
+    def download(self, video_id: str, dest_dir: Path, *args: object, **kwargs: object) -> Path:
+        from tunegrab.download.ytdlp import DownloadError
+
+        raise DownloadError("ERROR: [youtube] abc: n challenge solving failed")
+
+
+def test_refused_download_says_to_update_ytdlp(tmp_path: Path) -> None:
+    from tunegrab.download.ytdlp import BREAKAGE_HINT
+
+    pipeline, _ = make_pipeline(
+        tmp_path, tracks=[make_track(1)], downloader=RefusedDownloader(), retries=0
+    )
+    task = run(pipeline, ALBUM).tasks[0]
+    assert task.status == TaskStatus.FAILED
+    assert (task.error or "").startswith("YouTube refused this download (")
+    assert BREAKAGE_HINT in (task.error or "")

@@ -245,3 +245,36 @@ def test_cancel(tmp_path: Path) -> None:
 
 def test_clean_error() -> None:
     assert clean_error("\x1b[31mERROR: boom\x1b[0m ") == "boom"
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (DownloadError("HTTP Error 403: Forbidden"), "update yt-dlp in Settings"),
+        (DownloadError("n challenge solving failed"), "update yt-dlp in Settings"),
+        (DownloadError("Video unavailable"), "Video unavailable"),
+        (DownloadError("HTTP Error 429: Too Many Requests"), "Too Many Requests"),
+        (DownloadError("network hiccup"), "network hiccup"),
+        (OSError("boom"), "boom"),
+    ],
+)
+def test_describe_failure_names_the_fix_only_for_breakage(
+    error: BaseException, expected: str
+) -> None:
+    from tunegrab.download.ytdlp import describe_failure
+
+    text = describe_failure(error)
+    assert expected in text
+    assert ("update yt-dlp" in text) == (expected == "update yt-dlp in Settings")
+
+
+def test_describe_failure_looks_through_wrapping() -> None:
+    from tunegrab.download.ytdlp import describe_failure
+
+    try:
+        try:
+            raise DownloadError("HTTP Error 403: Forbidden")
+        except DownloadError as inner:
+            raise RuntimeError("HTTP Error 403: Forbidden") from inner
+    except RuntimeError as outer:
+        assert "update yt-dlp" in describe_failure(outer)

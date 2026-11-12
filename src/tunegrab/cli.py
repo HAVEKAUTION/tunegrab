@@ -37,7 +37,7 @@ from tunegrab.config import (
 )
 from tunegrab.doctor import CheckResult, Status, run_all, update_ytdlp
 from tunegrab.download.convert import FORMAT_HELP
-from tunegrab.download.ytdlp import DownloadError
+from tunegrab.download.ytdlp import BREAKAGE_HINT, DownloadError
 from tunegrab.imports import CsvImportError, collection_from_csv
 from tunegrab.library.archive import DownloadRecord
 from tunegrab.library.paths import TemplateError, move_into_place, validate_template
@@ -117,6 +117,8 @@ def cli_hint(message: str) -> str:
         return "Choose a YouTube video for it with: tunegrab fix"
     if "spotify developer credentials" in lowered or "spotify_client" in lowered:
         return "Setup steps: docs/SETUP.md"
+    if "update yt-dlp in settings" in lowered:
+        return "Update it with: tunegrab doctor --update"
     return ""
 
 
@@ -263,6 +265,15 @@ def run_jobs(services: Services, builders: list[tuple[str, Any]]) -> list[Job]:
             ):
                 console.print(
                     "Choose a YouTube video for unmatched songs with [bold]tunegrab fix[/]."
+                )
+            if any(
+                t.status == TaskStatus.FAILED and BREAKAGE_HINT in (t.error or "")
+                for job in finished
+                for t in job.tasks
+            ):
+                console.print(
+                    "YouTube refused some downloads; this usually means yt-dlp needs an "
+                    "update: [bold]tunegrab doctor --update[/]"
                 )
         for job in finished:
             collection = job.collection

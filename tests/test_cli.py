@@ -404,6 +404,11 @@ def test_app_neutral_messages_get_cli_hints() -> None:
         "Spotify rejected the client ID/secret. Check SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET"
     )
     assert cli_hint("Video unavailable") == ""
+    from tunegrab.download.ytdlp import BREAKAGE_HINT
+
+    assert "tunegrab doctor --update" in cli_hint(
+        f"YouTube refused this download (x). {BREAKAGE_HINT}"
+    )
 
 
 def test_no_user_facing_message_names_the_cli_or_dotenv() -> None:

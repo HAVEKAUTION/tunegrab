@@ -24,7 +24,13 @@ from typing import Protocol
 
 from tunegrab.config import Settings
 from tunegrab.download.convert import extension
-from tunegrab.download.ytdlp import DownloadCancelled, Downloader, DownloadError, SourceInfo
+from tunegrab.download.ytdlp import (
+    DownloadCancelled,
+    Downloader,
+    DownloadError,
+    SourceInfo,
+    describe_failure,
+)
 from tunegrab.library.archive import Archive
 from tunegrab.library.paths import move_into_place, render_path, template_fields
 from tunegrab.library.playlists import playlist_file, write_m3u8
@@ -333,9 +339,7 @@ class Pipeline:
         except Exception as exc:
             if is_disk_full(exc):
                 self.abort(DISK_FULL)
-            self._fail_task(
-                job, task, DISK_FULL if is_disk_full(exc) else str(exc) or type(exc).__name__
-            )
+            self._fail_task(job, task, DISK_FULL if is_disk_full(exc) else describe_failure(exc))
 
     def _fail_task(self, job: Job, task: TrackTask, error: str) -> None:
         stage = task.status.value if not task.status.finished else None

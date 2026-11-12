@@ -306,3 +306,13 @@ def test_unexpected_error_fails_one_video_and_the_job_continues(tmp_path: Path) 
     assert [t.status for t in job.tasks] == [TaskStatus.FAILED, TaskStatus.DONE]
     assert "KeyError" in (job.tasks[0].error or "")
     assert job.finished_at is not None
+
+
+def test_refused_video_says_to_update_ytdlp(tmp_path: Path) -> None:
+    from tunegrab.download.ytdlp import BREAKAGE_HINT
+
+    stub = StubDownloader(fail=[DownloadError("HTTP Error 403: Forbidden")])
+    pipeline, job = _pipeline(tmp_path, stub, retries=0)
+    asyncio.run(pipeline.run(job))
+    assert job.tasks[0].status == TaskStatus.FAILED
+    assert BREAKAGE_HINT in (job.tasks[0].error or "")
