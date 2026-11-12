@@ -52,6 +52,10 @@ class Tagger(Protocol):
         self, path: Path, track: Track, cover: bytes | None = None, lyrics: str | None = None
     ) -> None: ...
 
+    def identify(self, path: Path) -> tuple[str, str] | None:
+        """(title, artist) from an existing file's tags, if any."""
+        ...
+
 
 class LyricsSource(Protocol):
     def fetch(self, track: Track) -> Lyrics | None: ...
@@ -346,10 +350,28 @@ class Pipeline:
             log.exception("could not record failure")
         self._set(job, task, TaskStatus.FAILED, task.error)
 
+    def _adopt_existing(self, job: Job, task: TrackTask) -> bool:
+        """The song is already in the library under its usual name but missing from the
+        download history (a reset history, or a record that failed to save): use that file
+        instead of downloading it again as "Song (2)"."""
+        if task.track.is_incomplete:
+            return False  # its usual name isn't known until the details are filled in
+        target = self.target_path(job, task)
+        if not target.is_file() or self.archive.path_is_recorded(target):
+            return False  # nothing there, or it's another song's file
+        found = self.tagger.identify(target)
+        if found is None or not _same_song(found, task.track):
+            return False
+        self.archive.record_download(task.track, target, None, self.settings.format)
+        self.archive.resolve_failures(task.track.key)
+        task.path = str(target)
+        self._set(job, task, TaskStatus.SKIPPED, "already in your library")
+        return True
+
     def _skip_existing(self, job: Job, task: TrackTask) -> bool:
         existing = self.archive.downloaded_path(task.track.key)
         if existing is None:
-            return False
+            return self._adopt_existing(job, task)
         if existing.suffix.lower() != "." + extension(self.settings.format):
             return False  # asked for another format: download it in that format too
         folder_mode = (
@@ -425,12 +447,17 @@ class Pipeline:
             except OSError as exc:
                 log.info("could not write .lrc for %s: %s", target.name, exc)
 
-        # 7. archive
+        # 7. archive (the file is safe in the library whatever happens here)
         task.path = str(target)
         task.progress = 1.0
-        self.archive.record_download(track, target, candidate.video_id, self.settings.format)
-        self.archive.resolve_failures(track.key)
-        self._set(job, task, TaskStatus.DONE)
+        message = ""
+        try:
+            self.archive.record_download(track, target, candidate.video_id, self.settings.format)
+            self.archive.resolve_failures(track.key)
+        except Exception:
+            log.exception("could not record %s in the download history", target)
+            message = "saved, but not added to the download history"
+        self._set(job, task, TaskStatus.DONE, message)
 
     def _download(
         self,
@@ -507,6 +534,13 @@ class Pipeline:
         except Exception as exc:
             log.info("lyrics lookup failed for %s: %s", track.display, exc)
             return None
+
+
+def _same_song(found: tuple[str, str], track: Track) -> bool:
+    title, artist = (part.casefold().strip() for part in found)
+    return title == track.title.casefold().strip() and (
+        track.primary_artist.casefold().strip() in artist
+    )
 
 
 def run_job_sync(pipeline: Pipeline, job: Job) -> Job:

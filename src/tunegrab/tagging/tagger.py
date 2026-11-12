@@ -8,6 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import mutagen
 from mutagen.flac import FLAC, Picture, VCFLACDict
 from mutagen.id3 import (
     APIC,
@@ -243,8 +244,24 @@ def tag_file(
         raise TaggingError(f"Could not tag {path.name}: {exc}") from exc
 
 
+def read_title_artist(path: Path) -> tuple[str, str] | None:
+    """(title, artist) from a file's tags, or None if it has none or can't be read."""
+    try:
+        audio = mutagen.File(path, easy=True)
+    except Exception:
+        return None
+    if audio is None or not audio.tags:
+        return None
+    title = audio.tags.get("title") or [""]
+    artist = audio.tags.get("artist") or [""]
+    return (str(title[0]), str(artist[0])) if title[0] else None
+
+
 class MutagenTagger:
     def tag(
         self, path: Path, track: Track, cover: bytes | None = None, lyrics: str | None = None
     ) -> None:
         tag_file(path, track, cover, lyrics)
+
+    def identify(self, path: Path) -> tuple[str, str] | None:
+        return read_title_artist(path)

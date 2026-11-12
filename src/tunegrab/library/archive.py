@@ -248,6 +248,10 @@ class Archive:
             ),
         )
 
+    def path_is_recorded(self, path: Path) -> bool:
+        """True if any archived download (of any song) points at ``path``."""
+        return bool(self._execute("SELECT 1 FROM downloads WHERE path = ? LIMIT 1", (str(path),)))
+
     def forget_download(self, key: str) -> None:
         self._execute("DELETE FROM downloads WHERE key = ?", (key,))
 

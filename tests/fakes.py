@@ -268,11 +268,16 @@ class FakeDownloader:
 class FakeTagger:
     def __init__(self) -> None:
         self.tagged: list[tuple[Path, Track, bytes | None, str | None]] = []
+        self.tags: dict[str, tuple[str, str]] = {}  # file name -> (title, artist)
 
     def tag(
         self, path: Path, track: Track, cover: bytes | None = None, lyrics: str | None = None
     ) -> None:
         self.tagged.append((path, track, cover, lyrics))
+        self.tags[path.name] = (track.title, ", ".join(track.artists))
+
+    def identify(self, path: Path) -> tuple[str, str] | None:
+        return self.tags.get(path.name) if path.exists() else None
 
 
 def make_pipeline(

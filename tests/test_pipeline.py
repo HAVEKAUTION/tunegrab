@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
 from pathlib import Path
 
@@ -272,3 +273,49 @@ def test_duplicate_song_in_a_job_is_downloaded_once(tmp_path: Path) -> None:
     assert job.tasks[2].message == "already downloaded"
     assert job.tasks[2].path == job.tasks[0].path
     assert len(library_files(tmp_path)) == 2
+
+
+def _tag_library(pipeline: Pipeline, tmp_path: Path) -> None:
+    """Make the fake tagger 'read' the tags of the files now in the library."""
+    tagger = pipeline.tagger
+    assert isinstance(tagger, FakeTagger)
+    for path in library_files(tmp_path):
+        number = int(path.name[:2])
+        tagger.tags[path.name] = (f"Song {number}", f"Artist {number}")
+
+
+def test_songs_already_in_the_library_are_adopted_after_history_loss(tmp_path: Path) -> None:
+    pipeline, archive = make_pipeline(tmp_path)
+    run(pipeline, ALBUM)
+    _tag_library(pipeline, tmp_path)
+    for record in archive.all_downloads():
+        archive.forget_download(record.key)  # the history is gone, the files are not
+    job = run(pipeline, ALBUM)
+    assert statuses(job) == [TaskStatus.SKIPPED] * 3
+    assert {t.message for t in job.tasks} == {"already in your library"}
+    downloader = pipeline.downloader
+    assert isinstance(downloader, FakeDownloader) and downloader.calls == 3  # not 6
+    assert len(library_files(tmp_path)) == 3 and archive.stats()["downloads"] == 3
+
+
+def test_failed_history_write_keeps_the_song(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pipeline, archive = make_pipeline(tmp_path, tracks=[make_track(1)])
+    real = archive.record_download
+    calls = {"n": 0}
+
+    def flaky(*args: object, **kwargs: object) -> None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise sqlite3.OperationalError("database is locked")
+        real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(archive, "record_download", flaky)
+    job = run(pipeline, ALBUM)
+    assert statuses(job) == [TaskStatus.DONE]
+    assert job.tasks[0].message == "saved, but not added to the download history"
+    _tag_library(pipeline, tmp_path)
+    again = run(pipeline, ALBUM)
+    assert statuses(again) == [TaskStatus.SKIPPED]
+    assert [p.name for p in library_files(tmp_path)] == ["01 - Song 1.mp3"]  # no "(2)" copy
