@@ -832,7 +832,15 @@ function renderLibrary() {
   $("#lib-meta").innerHTML = `${plural(lib.tracks.length, "song")} in <span class="mono">${esc(lib.root)}</span>${missing ? ` · <span style="color:var(--warn)">${missing} moved or deleted</span>` : ""}`;
   $("#playlists").innerHTML = lib.playlists.length && !q ? `<div class="card" style="margin-top:var(--s-6)"><h3 style="margin-bottom:var(--s-2)">Playlists</h3><table><tbody>
     ${lib.playlists.map((p) => `<tr><td class="t-title">${esc(p.name)}</td><td class="muted tnum">${plural(p.tracks, "song")}</td><td class="c-end xs faint">Updated ${when(p.synced_at)}</td></tr>`).join("")}</tbody></table></div>` : "";
+  const videos = (lib.videos || []).filter((v) => !q || [v.title, v.uploader].some((x) => (x || "").toLowerCase().includes(q)));
+  $("#videos").innerHTML = videos.length ? `<div class="card" style="margin-top:var(--s-6)"><h3 style="margin-bottom:var(--s-2)">Videos</h3><table><tbody>
+    ${videos.map((v) => `<tr><td><div class="t-title">${esc(v.title)}</div><div class="t-sub">${esc(v.uploader)}</div></td>
+      <td class="xs faint">${v.mode === "audio" ? `Audio${v.format ? ` · ${esc(v.format.toUpperCase())}` : ""}` : "Video"}${v.clip ? " · clip" : ""}${v.source ? ` · ${esc(v.source)}` : ""}</td>
+      <td class="c-time tnum">${v.duration_s ? fmtTime(v.duration_s) : ""}</td>
+      <td class="c-end">${v.exists ? `<button class="btn ghost sm" data-show="${esc(v.path)}" aria-label="Show ${esc(v.title)} in folder">${icon("folder")}Show</button>` : `<span class="xs" style="color:var(--warn)">moved or deleted</span>`}</td></tr>`).join("")}
+    </tbody></table></div>` : "";
   if (!tracks.length) {
+    if (videos.length) { $("#library").innerHTML = ""; return; }
     $("#library").innerHTML = lib.tracks.length
       ? `<div class="card empty" style="margin-top:var(--s-6)">${icon("search")}<p>Nothing matches “${esc(q)}”.</p></div>`
       : `<div class="card empty" style="margin-top:var(--s-6)">${icon("library")}<h3>Your library is empty</h3><p>Songs you download appear here, grouped by artist and album.</p><button class="btn" data-goto-get>${icon("search")}Find music</button></div>`;

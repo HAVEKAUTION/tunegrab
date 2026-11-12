@@ -21,12 +21,26 @@ from tunegrab.models import Candidate, Collection, Track
 log = logging.getLogger(__name__)
 T = TypeVar("T")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 # Version n -> the statements that upgrade a version n-1 history to n, run in one
 # transaction after a backup copy is made. SCHEMA below is always the newest layout (it
 # creates fresh histories and any table an older one lacks).
 MIGRATIONS: dict[int, tuple[str, ...]] = {
     2: ("ALTER TABLE failures ADD COLUMN format TEXT",),  # retries keep the job's format
+    3: (  # videos and audio-from-link downloads, done or failed
+        """CREATE TABLE IF NOT EXISTS videos (
+    key TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    entry_json TEXT NOT NULL,
+    options_json TEXT NOT NULL,
+    format TEXT,
+    path TEXT,
+    source TEXT,
+    status TEXT NOT NULL,
+    error TEXT,
+    updated_at TEXT NOT NULL
+);""",
+    ),
 }
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -69,6 +83,18 @@ CREATE TABLE IF NOT EXISTS failures (
     format TEXT
 );
 CREATE INDEX IF NOT EXISTS failures_open ON failures (resolved, key);
+CREATE TABLE IF NOT EXISTS videos (
+    key TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    entry_json TEXT NOT NULL,
+    options_json TEXT NOT NULL,
+    format TEXT,
+    path TEXT,
+    source TEXT,
+    status TEXT NOT NULL,
+    error TEXT,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS playlists (
     playlist_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -117,6 +143,27 @@ class FailureRecord:
     reason: str
     failed_at: str
     format: str | None = None
+
+
+@dataclass(frozen=True)
+class VideoRecord:
+    """A video link downloaded (status "done") or not (status "failed") with given options.
+    ``entry`` and ``options`` are plain dicts so the archive needn't know the video module."""
+
+    key: str
+    url: str
+    entry: dict[str, Any]
+    options: dict[str, Any]
+    format: str | None
+    path: Path | None
+    source: str | None
+    status: str
+    error: str | None
+    updated_at: str
+
+    @property
+    def exists(self) -> bool:
+        return self.path is not None and self.path.is_file()
 
 
 class SchemaTooNewError(TuneGrabError):
@@ -427,13 +474,101 @@ class Archive:
             "failure",
         )
 
+    # --- videos ---------------------------------------------------------------------------
+    def _put_video(
+        self,
+        key: str,
+        entry: dict[str, Any],
+        options: dict[str, Any],
+        fmt: str | None,
+        *,
+        path: Path | None,
+        source: str | None,
+        status: str,
+        error: str | None,
+    ) -> None:
+        self._execute(
+            """INSERT OR REPLACE INTO videos (key, url, entry_json, options_json, format, path,
+                 source, status, error, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                key,
+                str(entry.get("url", "")),
+                dumps(entry),
+                dumps(options),
+                fmt,
+                str(path) if path is not None else None,
+                source,
+                status,
+                error,
+                _now(),
+            ),
+        )
+
+    def record_video(
+        self,
+        key: str,
+        entry: dict[str, Any],
+        options: dict[str, Any],
+        fmt: str | None,
+        path: Path,
+        source: str | None,
+    ) -> None:
+        self._put_video(
+            key, entry, options, fmt, path=path, source=source, status="done", error=None
+        )
+
+    def record_video_failure(
+        self,
+        key: str,
+        entry: dict[str, Any],
+        options: dict[str, Any],
+        fmt: str | None,
+        error: str,
+    ) -> None:
+        done = self.get_video(key)
+        if done is not None and done.status == "done" and done.exists:
+            return  # a copy is already saved; don't list it as failed
+        self._put_video(
+            key, entry, options, fmt, path=None, source=None, status="failed", error=error
+        )
+
+    def _video_rows(self, where: str, params: tuple[Any, ...] = ()) -> list[VideoRecord]:
+        rows = self._execute(f"SELECT * FROM videos {where}", params)
+        return _parse_rows(
+            rows,
+            lambda r: VideoRecord(
+                key=r["key"],
+                url=r["url"],
+                entry=json.loads(r["entry_json"]),
+                options=json.loads(r["options_json"]),
+                format=r["format"],
+                path=Path(r["path"]) if r["path"] else None,
+                source=r["source"],
+                status=r["status"],
+                error=r["error"],
+                updated_at=r["updated_at"],
+            ),
+            "video",
+        )
+
+    def get_video(self, key: str) -> VideoRecord | None:
+        found = self._video_rows("WHERE key = ?", (key,))
+        return found[0] if found else None
+
+    def all_videos(self) -> list[VideoRecord]:
+        return self._video_rows("WHERE status = 'done' ORDER BY updated_at DESC")
+
+    def video_failures(self) -> list[VideoRecord]:
+        return self._video_rows("WHERE status = 'failed' ORDER BY updated_at")
+
     def resolve_failures(self, key: str) -> None:
         self._execute("UPDATE failures SET resolved = 1 WHERE key = ? AND resolved = 0", (key,))
 
     def clear_failures(self) -> int:
         with self._lock, self._conn:
+            videos = self._conn.execute("DELETE FROM videos WHERE status = 'failed'").rowcount
             cursor = self._conn.execute("UPDATE failures SET resolved = 1 WHERE resolved = 0")
-            return cursor.rowcount
+            return cursor.rowcount + videos
 
     # --- playlists -------------------------------------------------------------------
     def set_playlist(self, collection: Collection) -> None:

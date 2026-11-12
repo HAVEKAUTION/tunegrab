@@ -18,6 +18,7 @@ from tunegrab.config import (
 )
 from tunegrab.download.ytdlp import DownloadError
 from tunegrab.imports import collection_from_csv
+from tunegrab.library.archive import VideoRecord
 from tunegrab.matching.base import SearchError
 from tunegrab.metadata.base import MetadataError
 from tunegrab.models import Collection, Job, Match, TaskStatus, Track, TrackTask
@@ -38,6 +39,7 @@ from tunegrab.video import (
     VideoProbe,
     build_job,
     check_clip,
+    job_for_entries,
     parse_time,
     probe,
 )
@@ -357,7 +359,13 @@ class JobManager:
     def _video_pipeline(
         self, options: VideoOptions, entries: dict[str, VideoEntry], fmt: str | None
     ) -> VideoPipeline:
-        return VideoPipeline(self._settings_for(fmt), options, entries, on_event=self._on_event)
+        return VideoPipeline(
+            self._settings_for(fmt),
+            options,
+            entries,
+            on_event=self._on_event,
+            archive=self.services.archive,
+        )
 
     async def submit_video(self, request: VideoRequest) -> Job:
         self.loop = asyncio.get_running_loop()
@@ -440,7 +448,8 @@ class JobManager:
         if any(j.input == "retry" and not (j.finished_at or j.error) for j in self.jobs.values()):
             raise ValueError("Failed songs are already being retried.")
         records = self.services.archive.open_failures()
-        if not records:
+        videos = self.services.archive.video_failures()
+        if not records and not videos:
             raise ValueError("No failed tracks to retry.")
         # one job per format the songs were wanted in (usually just one)
         by_format: dict[str | None, dict[str, Track]] = {}
@@ -466,7 +475,33 @@ class JobManager:
             )
             self._spawn(self._run(job, pipeline))
             jobs.append(job)
+        jobs += self._retry_failed_videos(videos)
         return jobs[0]
+
+    def _retry_failed_videos(self, records: list[VideoRecord]) -> list[Job]:
+        """One job per set of options (and format) the failed videos were wanted with."""
+        groups: dict[tuple[str, str | None], list[VideoRecord]] = {}
+        for record in records:
+            groups.setdefault(
+                (json.dumps(record.options, sort_keys=True), record.format), []
+            ).append(record)
+        jobs: list[Job] = []
+        for (options_json, fmt), items in groups.items():
+            try:
+                options = VideoOptions(**json.loads(options_json))
+                videos = [VideoEntry(**r.entry) for r in items]
+            except (TypeError, ValueError):
+                log.warning("skipping unreadable video failures: %s", [r.key for r in items])
+                continue
+            name = "Retry failed videos" if options.mode == "video" else "Retry failed audio"
+            job, entries = job_for_entries(items[0].url, name, None, videos, options)
+            job.input, job.format = "retry", fmt
+            self.jobs[job.id] = job
+            self.video_jobs[job.id] = (options, entries)
+            self._publish("job", job_summary(job))
+            self._spawn(self._run(job, self._video_pipeline(options, entries, fmt)))
+            jobs.append(job)
+        return jobs
 
     def retry(self, job_id: str, task_ids: set[str] | None = None) -> Job:
         """Re-run the failed tracks of a job (or only ``task_ids`` of them)."""

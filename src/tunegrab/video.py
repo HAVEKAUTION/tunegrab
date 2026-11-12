@@ -27,7 +27,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -49,6 +49,7 @@ from tunegrab.download.ytdlp import (
     source_info,
 )
 from tunegrab.errors import TuneGrabError
+from tunegrab.library.archive import Archive
 from tunegrab.library.paths import move_into_place, sanitize_segment
 from tunegrab.models import Collection, Job, TaskStatus, Track, TrackTask
 from tunegrab.pacing import Pacer
@@ -504,18 +505,29 @@ def final_path(root: Path, entry: VideoEntry, options: VideoOptions, ext: str) -
 # --- jobs --------------------------------------------------------------------------------
 
 
+def video_key(entry: VideoEntry, options: VideoOptions, fmt: str | None) -> str:
+    """Identifies one download in the history: the same link with the same options is the
+    same file (the quality only matters for video, the format only for audio)."""
+    variant = options.quality if options.mode == "video" else (fmt or "")
+    return f"{entry.url}|{options.mode}|{variant}|{options.start}|{options.end}"
+
+
 def build_job(found: VideoProbe, options: VideoOptions) -> tuple[Job, dict[str, VideoEntry]]:
     """A Job (for the Downloads list) with one task per video; returns task id -> entry."""
+    return job_for_entries(
+        found.url, found.title + options.clip_suffix(), found.uploader, found.entries, options
+    )
+
+
+def job_for_entries(
+    url: str, name: str, owner: str | None, videos: list[VideoEntry], options: VideoOptions
+) -> tuple[Job, dict[str, VideoEntry]]:
     collection = Collection(
-        kind="video",
-        id=found.url,
-        name=found.title + options.clip_suffix(),
-        owner=found.uploader,
-        source=f"video:{options.mode}",
+        kind="video", id=url, name=name, owner=owner, source=f"video:{options.mode}"
     )
     tasks: list[TrackTask] = []
     entries: dict[str, VideoEntry] = {}
-    for position, entry in enumerate(found.entries, start=1):
+    for position, entry in enumerate(videos, start=1):
         track = Track(
             title=entry.title,
             artists=[entry.uploader],
@@ -526,7 +538,7 @@ def build_job(found: VideoProbe, options: VideoOptions) -> tuple[Job, dict[str, 
         tasks.append(task)
         entries[task.id] = entry
     collection.tracks = [t.track for t in tasks]
-    return Job(input=found.url, collection=collection, tasks=tasks), entries
+    return Job(input=url, collection=collection, tasks=tasks), entries
 
 
 @dataclass
@@ -541,6 +553,8 @@ class VideoPipeline(TaskRunner):
     retry_backoff: float = 2.0
     # None: the process-wide pacer for YouTube (see tunegrab.pacing)
     pacer: Pacer | None = None
+    # download history: skips links already saved with these options, remembers failures
+    archive: Archive | None = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
     abort_reason: str | None = field(default=None, init=False)
 
@@ -586,8 +600,9 @@ class VideoPipeline(TaskRunner):
         assert self.downloader is not None
         entry = self.entries[task.id]
         target = final_path(self.root, entry, self.options, self.downloader.extension)
-        if target.exists():
-            task.path = str(target)
+        saved = self._saved_copy(entry)
+        if saved is not None or target.exists():
+            task.path = str(saved or target)
             self._set(job, task, TaskStatus.SKIPPED, "already downloaded")
             return
 
@@ -636,4 +651,44 @@ class VideoPipeline(TaskRunner):
         task.low_quality = low_quality
         task.path = str(final)
         task.progress = 1.0
+        if self.archive is not None:
+            try:
+                self.archive.record_video(
+                    self._key(entry),
+                    asdict(entry),
+                    asdict(self.options),
+                    self._format,
+                    final,
+                    label,
+                )
+            except Exception:  # the file is saved; only the history entry is missing
+                log.exception("could not record video %s", entry.url)
         self._set(job, task, TaskStatus.DONE)
+
+    @property
+    def _format(self) -> str | None:
+        return self.settings.format if self.options.mode == "audio" else None
+
+    def _key(self, entry: VideoEntry) -> str:
+        return video_key(entry, self.options, self._format)
+
+    def _saved_copy(self, entry: VideoEntry) -> Path | None:
+        """Where this link was already saved with these options, if the file is still there."""
+        if self.archive is None:
+            return None
+        try:
+            record = self.archive.get_video(self._key(entry))
+        except Exception:
+            log.exception("could not read the video history")
+            return None
+        if record is None or record.status != "done" or not record.exists:
+            return None
+        return record.path
+
+    def _record_failure(self, job: Job, task: TrackTask) -> None:
+        if self.archive is None:
+            return
+        entry = self.entries[task.id]
+        self.archive.record_video_failure(
+            self._key(entry), asdict(entry), asdict(self.options), self._format, task.error or ""
+        )

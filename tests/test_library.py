@@ -299,11 +299,12 @@ def _version(db: Path) -> int:
 def test_v1_history_is_upgraded_with_a_backup(tmp_path: Path) -> None:
     db = _v1_copy(tmp_path)
     with Archive(db) as archive:
-        assert archive.get_meta("schema_version") == archive_module.SCHEMA_VERSION == 2
+        assert archive.get_meta("schema_version") == archive_module.SCHEMA_VERSION == 3
         [record] = archive.all_downloads()
         assert record.video_id == "aaaaaaaaaaa" and record.track.title == "Song 1"
         columns = [r["name"] for r in archive._execute("PRAGMA table_info(failures)")]
         assert "format" in columns
+        assert archive.all_videos() == [] and archive.video_failures() == []
     backup = tmp_path / "tunegrab.db.bak-v1"
     assert _version(backup) == 1  # the untouched 0.4.x history
     with Archive(db):  # second open: already current, no new backup

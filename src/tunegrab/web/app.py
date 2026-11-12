@@ -239,7 +239,8 @@ def create_app(
                 "config": str(config_file()),
             },
             "default_folder": "output_dir" not in read_config_file(),
-            "failures": len(services.archive.open_failures()),
+            "failures": len(services.archive.open_failures())
+            + len(services.archive.video_failures()),
             "warnings": list(startup_warnings),
         }
 
@@ -501,6 +502,23 @@ def create_app(
                 for r in records
             ],
             "playlists": services.archive.playlists(),
+            "videos": [
+                {
+                    "key": v.key,
+                    "url": v.url,
+                    "title": v.entry.get("title") or v.url,
+                    "uploader": v.entry.get("uploader") or "",
+                    "duration_s": v.entry.get("duration_s"),
+                    "mode": v.options.get("mode"),
+                    "clip": v.options.get("start") is not None or v.options.get("end") is not None,
+                    "format": v.format,
+                    "source": v.source,
+                    "path": str(v.path) if v.path else None,
+                    "exists": v.exists,
+                    "downloaded_at": v.updated_at,
+                }
+                for v in services.archive.all_videos()
+            ],
         }
 
     @app.get("/api/settings")

@@ -452,8 +452,10 @@ def video(
     )
     job, entries = build_job(found, options)
     display = LiveProgress(console)
-    pipeline = VideoPipeline(settings, options, entries, on_event=display.on_event)
-    with display:
+    with services_for(settings) as services, display:
+        pipeline = VideoPipeline(
+            settings, options, entries, on_event=display.on_event, archive=services.archive
+        )
         display.start_job(job)
         try:
             asyncio.run(pipeline.run(job))

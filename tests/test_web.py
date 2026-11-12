@@ -264,6 +264,53 @@ def test_video_retry_keeps_the_jobs_format(
     assert used == ["opus"]
 
 
+def test_failed_video_survives_a_restart_and_shows_in_library(
+    services: FakeServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tunegrab import video
+    from tunegrab.download.ytdlp import DownloadError
+    from tunegrab.video import VideoEntry, VideoProbe
+
+    entry = VideoEntry("dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ", "Song", "Chan", 213)
+    monkeypatch.setattr(
+        web_jobs,
+        "probe",
+        lambda url, cookies=None: VideoProbe(url, "video", "Song", "Chan", "Youtube", [entry]),
+    )
+    attempts: list[str] = []
+
+    def flaky(self: Any, url: str, dest: Path, progress: Any = None, cancel: Any = None):  # type: ignore[no-untyped-def]
+        attempts.append(url)
+        if len(attempts) == 1:
+            raise DownloadError("Video unavailable")
+        dest.mkdir(parents=True, exist_ok=True)
+        out = dest / f"x.{self.extension}"
+        out.write_bytes(b"v")
+        return out, "720p H.264", False
+
+    monkeypatch.setattr(video.VideoDownloader, "download", flaky)
+    services.settings = services.settings.model_copy(update={"retries": 0})
+    base = "http://127.0.0.1:8765"
+    with TestClient(create_app(services=services), base_url=base) as first:
+        created = first.post("/api/video", json={"url": entry.url}).json()
+        assert wait_for(first, created["id"], ("finished",))["counts"]["failed"] == 1
+    with TestClient(create_app(services=services), base_url=base) as second:  # restarted
+        assert second.get("/api/system").json()["failures"] == 1
+        retried = second.post("/api/failures/retry")
+        assert retried.status_code == 202 and retried.json()["name"] == "Retry failed videos"
+        assert wait_for(second, retried.json()["id"], ("finished",))["counts"]["done"] == 1
+        assert second.get("/api/system", params={"fresh": True}).json()["failures"] == 0
+        [saved] = second.get("/api/library").json()["videos"]
+        assert saved["title"] == "Song" and saved["mode"] == "video" and saved["exists"]
+        opened: list[Path] = []
+        monkeypatch.setattr(web_app, "open_in_file_manager", opened.append)
+        assert second.post("/api/open", json={"path": saved["path"]}).status_code == 200
+        # the same link again is skipped, not downloaded twice
+        again = second.post("/api/video", json={"url": entry.url}).json()
+        assert wait_for(second, again["id"], ("finished",))["counts"]["skipped"] == 1
+    assert len(attempts) == 2
+
+
 def test_events_are_published(client: TestClient) -> None:
     manager = client.app.state.manager  # type: ignore[attr-defined]
     queue = manager.subscribe()
