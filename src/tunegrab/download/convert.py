@@ -17,11 +17,17 @@ FORMAT_HELP = (
     "no quality gain). YouTube audio is ~128-160 kbps lossy whatever you pick."
 )
 
+# "-drc" formats are YouTube's "stable volume" copies: dynamic range compressed, so worse
+# for music (yt-dlp#8259). They are only used when nothing else exists.
+NO_DRC = "[format_id!$=-drc]"
 FORMAT_SELECTORS: dict[str, str] = {
-    "mp3": "bestaudio/best",
-    "m4a": "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best",
-    "opus": "bestaudio[acodec=opus]/bestaudio/best",
-    "flac": "bestaudio/best",
+    "mp3": f"bestaudio{NO_DRC}/bestaudio/best",
+    "m4a": (
+        f"bestaudio[ext=m4a]{NO_DRC}/bestaudio[acodec^=mp4a]{NO_DRC}/"
+        f"bestaudio{NO_DRC}/bestaudio/best"
+    ),
+    "opus": f"bestaudio[acodec=opus]{NO_DRC}/bestaudio{NO_DRC}/bestaudio/best",
+    "flac": f"bestaudio{NO_DRC}/bestaudio/best",
 }
 
 

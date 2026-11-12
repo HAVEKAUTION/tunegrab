@@ -167,6 +167,7 @@ td.c-end { text-align: right; white-space: nowrap; }
 .empty svg.i { width: 28px; height: 28px; stroke: var(--text-3); }
 .empty h3 { color: var(--text-1); }
 .error-text { color: var(--bad); }
+.warn-text { color: var(--warn); }
 .skeleton { background: linear-gradient(90deg, var(--n-2), var(--n-3), var(--n-2)); background-size: 200% 100%;
             animation: shimmer 1.2s ease-in-out infinite; border-radius: var(--r-md); }
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
@@ -198,6 +199,11 @@ dialog.modal { width: min(520px, calc(100vw - 32px)); }
 .finder .btn { height: 44px; }
 .examples { display: flex; gap: var(--s-2); flex-wrap: wrap; justify-content: center; }
 .artist-head { display: flex; align-items: center; gap: var(--s-4); margin-bottom: var(--s-4); }
+.video-head { display: grid; grid-template-columns: minmax(0, 240px) 1fr; gap: var(--s-4); align-items: start; margin-bottom: var(--s-4); }
+.video-head .thumb { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--r-sm); background: var(--n-3); }
+.video-form { display: flex; flex-wrap: wrap; gap: var(--s-4); align-items: end; }
+.video-form .input.time { width: 96px; }
+@media (max-width: 640px) { .video-head { grid-template-columns: 1fr; } }
 .artist-head img, .artist-head .ph { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; background: var(--n-3); flex: none; }
 .artist-head .grow { flex: 1; min-width: 0; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; gap: var(--s-3); flex-wrap: wrap; margin: var(--s-4) 0; }
@@ -314,11 +320,11 @@ details.tracks table { margin-top: var(--s-2); }
       <!-- ============================================================ GET MUSIC -->
       <section id="tab-get" aria-labelledby="get-title">
         <div class="page-head"><div><h1 id="get-title">Get music</h1>
-          <p class="muted">Find an artist, album or playlist, tick what you want, then download the queue.</p></div></div>
+          <p class="muted">Find an artist, album or playlist, tick what you want, then download the queue. Paste a YouTube (or other video) link to save the video, a clip of it, or its audio.</p></div></div>
         <form id="finder" class="finder" autocomplete="off" role="search">
-          <label class="search"><span class="sr">Spotify link or artist name</span>
+          <label class="search"><span class="sr">Spotify link, video link or artist name</span>
             <svg class="i lg"><use href="#i-search"/></svg>
-            <input id="url" class="input" type="text" placeholder="Spotify link or artist name" required></label>
+            <input id="url" class="input" type="text" placeholder="Spotify link, YouTube link or artist name" required></label>
           <label><span class="sr">Audio format</span>
             <select id="format" class="select" title="Audio format for these downloads">
               <option value="">Default format</option><option value="mp3">MP3</option><option value="m4a">M4A · original audio</option>
@@ -368,6 +374,12 @@ details.tracks table { margin-top: var(--s-2); }
               <label class="field"><span class="label">MP3 bitrate</span><select id="s-bitrate" class="select">
                 <option value="128">128 kbps</option><option value="192">192 kbps</option><option value="256">256 kbps</option><option value="320">320 kbps</option></select></label>
             </div></div>
+          <div class="card"><h3>Video</h3><p class="muted small">For YouTube (and other) video links. Videos are saved in a <span class="mono">Videos</span> folder inside your music folder.</p>
+            <div class="form-grid">
+              <label class="field"><span class="label">Video quality</span><select id="s-video_quality" class="select">
+                <option value="best">Best available</option><option value="2160">4K (2160p)</option><option value="1440">1440p</option><option value="1080">1080p</option><option value="720">720p</option><option value="480">480p</option><option value="360">360p</option></select>
+                <span class="help">The highest resolution to download. 1080p is sharp and plays on anything; above 1080p YouTube only offers VP9/AV1.</span></label>
+            </div></div>
           <div class="card"><h3>Downloads</h3><p class="muted small">How TuneGrab works through your queue.</p>
             <div class="form-grid">
               <label class="field"><span class="label">Songs at once</span><input id="s-threads" class="input tnum" type="number" min="1" max="16"><span class="help">1–16. Four is a good balance.</span></label>
@@ -387,9 +399,15 @@ details.tracks table { margin-top: var(--s-2); }
               <button type="submit" class="btn primary" id="s-save"><svg class="i"><use href="#i-check"/></svg>Save</button></div></div>
         </form>
         <div class="card" style="margin-top:var(--s-4)"><div class="row between"><h3>System</h3>
-          <button class="btn sm" id="sys-recheck"><svg class="i"><use href="#i-refresh"/></svg>Check again</button></div>
+          <div class="row"><button class="btn sm ghost" id="sys-update" title="Get the newest yt-dlp. YouTube changes often, and an old yt-dlp is the most common reason downloads fail."><svg class="i"><use href="#i-download"/></svg>Update yt-dlp</button>
+          <button class="btn sm" id="sys-recheck"><svg class="i"><use href="#i-refresh"/></svg>Check again</button></div></div>
           <p class="muted small" style="margin:var(--s-1) 0 var(--s-3)">Tools TuneGrab needs to download and convert audio.</p>
           <table class="checks"><tbody id="sys-table"></tbody></table></div>
+        <div class="card"><div class="row between"><h3>Storage</h3>
+          <button class="btn sm" id="st-clean"><svg class="i"><use href="#i-x"/></svg>Free up space</button></div>
+          <p class="muted small" style="margin:var(--s-1) 0 var(--s-3)">What TuneGrab keeps besides your music. Freeing space never touches your music, settings or download history.</p>
+          <table class="checks" aria-label="Storage"><tbody id="st-table"><tr><td class="muted small">Measuring…</td></tr></tbody></table>
+          <label class="check small" style="margin-top:var(--s-3)"><input id="st-uv" type="checkbox"> Include uv's package cache (shared by every uv project; only unused packages are removed)</label></div>
         <div class="card"><h3>About</h3>
           <dl class="kv" id="about" style="margin-top:var(--s-3)"></dl></div>
       </section>
@@ -490,12 +508,33 @@ function showTab(name, { focus = false } = {}) {
   document.title = `${{ get: "Get music", jobs: "Downloads", library: "Library", settings: "Settings" }[name]} · TuneGrab`;
   $("#queuebar").classList.toggle("hidden", name !== "get" || !queue.size);
   if (name === "library") loadLibrary();
-  if (name === "settings") { loadSettings(); renderSystem(); }
+  if (name === "settings") { loadSettings(); renderSystem(); loadStorage(); }
   if (name === "jobs") loadHistory();
   if (focus) $(`#tab-${name} h1`).focus?.();
 }
 $$(".nav-item").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
+
+// ============================================================== storage
+const fmtBytes = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(2)} GB`;
+async function loadStorage() {
+  const uv = $("#st-uv").checked;
+  try {
+    const { items } = await api(`/api/storage${uv ? "?uv=1" : ""}`);
+    $("#st-table").innerHTML = items.map((i) => `<tr><td><div class="t-title">${esc(i.label)}</div><div class="xs faint mono">${esc(i.path)}</div>
+      ${i.note ? `<div class="xs faint">${esc(i.note)}</div>` : ""}</td><td class="c-end tnum">${fmtBytes(i.size)}</td></tr>`).join("");
+  } catch (err) { $("#st-table").innerHTML = `<tr><td class="small error-text">${esc(err.message)}</td></tr>`; }
+}
+$("#st-uv").addEventListener("change", () => { $("#st-table").innerHTML = `<tr><td class="muted small">Measuring…</td></tr>`; loadStorage(); });
+$("#st-clean").addEventListener("click", async () => {
+  const btn = $("#st-clean"); btn.disabled = true;
+  const keys = ["tmp", "logs", "database", "ytdlp_cache", ...($("#st-uv").checked ? ["uv_cache"] : [])];
+  try {
+    const r = await api("/api/storage/clean", { method: "POST", body: JSON.stringify({ keys }) });
+    toast(r.freed ? `Freed ${fmtBytes(r.freed)}.` : "Nothing to free: already tidy.");
+  } catch (err) { toast(err.message, { kind: "bad" }); }
+  btn.disabled = false; loadStorage();
+});
 
 // ============================================================== system status
 const state = { jobs: new Map(), tasks: new Map(), history: [], library: null, system: null };
@@ -538,6 +577,18 @@ function renderSystem() {
 document.addEventListener("click", async (e) => {
   const recheck = e.target.closest("[data-recheck], #sys-recheck");
   if (recheck) { recheck.disabled = true; await loadSystem(true); recheck.disabled = false; toast("Checked your setup again."); }
+  const update = e.target.closest("#sys-update");
+  if (update) {
+    update.disabled = true;
+    const label = update.innerHTML;
+    update.innerHTML = `${icon("refresh", "spin")}Updating…`;
+    try {
+      await api("/api/system/update-ytdlp", { method: "POST" });
+      toast("yt-dlp updated. Restart TuneGrab to use the new version.", { timeout: 10000 });
+    } catch (err) { toast(err.message, { kind: "bad", timeout: 12000 }); }
+    update.innerHTML = label; update.disabled = false;
+    loadSystem(true);
+  }
   const copy = e.target.closest("[data-copy]");
   if (copy) {
     try { await navigator.clipboard.writeText(copy.dataset.copy); toast("Path copied."); }
@@ -564,7 +615,7 @@ function setFinderError(message) {
 
 async function browse(text) {
   text = (text ?? $("#url").value).trim();
-  if (!text) { setFinderError("Paste a Spotify link or type an artist name."); $("#url").focus(); return; }
+  if (!text) { setFinderError("Paste a Spotify or YouTube link, or type an artist name."); $("#url").focus(); return; }
   $("#url").value = text;
   setFinderError("");
   view.loading = true; view.error = false;
@@ -652,9 +703,66 @@ async function fullDiscography(btn) {
 function renderBrowse() {
   const d = view.data;
   if (!d) return;
-  $("#browse").innerHTML = d.type === "artist" ? artistHtml(d) : collectionHtml(d);
+  $("#browse").innerHTML = d.type === "artist" ? artistHtml(d) : d.type === "video" ? videoHtml(d) : collectionHtml(d);
   if (view.sheetKey && $("#sheet").open) renderSheet();
 }
+
+// ============================================================== get music: video links
+const VQ_LABEL = { best: "Best available", 2160: "4K (2160p)", 1440: "1440p", 1080: "1080p", 720: "720p", 480: "480p", 360: "360p" };
+const videoForm = { mode: "video" };
+function videoHtml(v) {
+  const single = v.kind === "video";
+  const top = v.heights && v.heights.length ? v.heights[0] : null;
+  const qualities = ["best", "2160", "1440", "1080", "720", "480", "360"].filter((q) => q === "best" || !top || Number(q) <= top || q === v.default_quality);
+  const quality = qualities.includes(v.default_quality) ? v.default_quality : "best";
+  const meta = single
+    ? [v.uploader, v.duration_s ? fmtTime(v.duration_s) : null, top ? `up to ${top}p` : null, v.site].filter(Boolean).join(" · ")
+    : [v.uploader, plural(v.count, "video"), v.site].filter(Boolean).join(" · ");
+  const list = !single && v.entries.length ? `<div class="card" style="margin-top:var(--s-4)"><table><tbody>${v.entries.map((e, i) => `<tr><td class="c-num tnum">${i + 1}</td>
+      <td><div class="t-title">${esc(e.title)}</div><div class="t-sub">${esc(e.uploader)}</div></td><td class="c-time tnum">${e.duration_s ? fmtTime(e.duration_s) : ""}</td></tr>`).join("")}</tbody></table>
+      ${v.count > v.entries.length ? `<p class="small faint" style="margin:var(--s-2) 0 0">and ${v.count - v.entries.length} more</p>` : ""}</div>` : "";
+  return `<div class="video-head">${v.thumbnail ? `<img class="thumb" src="${esc(v.thumbnail)}" alt="">` : `<span class="thumb"></span>`}
+      <div><div class="xs faint" style="text-transform:uppercase;letter-spacing:.06em">${single ? "Video" : "Playlist"}</div><h2>${esc(v.title)}</h2>
+      <div class="small muted">${esc(meta)}</div></div></div>
+    <form class="card" id="video-form" novalidate>
+      <div class="video-form">
+        <div class="field"><span class="label" id="vmode-label">Save as</span><div class="chips" role="group" aria-labelledby="vmode-label">
+          <button type="button" class="chip" data-vmode="video" aria-pressed="${videoForm.mode === "video"}">Video (MP4)</button>
+          <button type="button" class="chip" data-vmode="audio" aria-pressed="${videoForm.mode === "audio"}">Audio only</button></div></div>
+        <label class="field" id="vq-field" ${videoForm.mode === "audio" ? "hidden" : ""}><span class="label">Quality</span><select id="v-quality" class="select">
+          ${qualities.map((q) => `<option value="${q}" ${q === quality ? "selected" : ""}>${VQ_LABEL[q]}</option>`).join("")}</select></label>
+        ${single ? `<label class="field"><span class="label">Clip from</span><input id="v-start" class="input time tnum" type="text" inputmode="decimal" placeholder="0:00" aria-describedby="v-help"></label>
+        <label class="field"><span class="label">to</span><input id="v-end" class="input time tnum" type="text" inputmode="decimal" placeholder="${v.duration_s ? fmtTime(v.duration_s) : "end"}" aria-describedby="v-help"></label>` : ""}
+        <button class="btn primary" type="submit" id="v-go">${icon("download")}Download</button>
+      </div>
+      <p class="small faint" id="v-help" style="margin:var(--s-3) 0 0">${single ? "Leave the clip times empty for the whole video. " : ""}${videoForm.mode === "audio" ? `Audio goes to your music folder in the format chosen above.` : `Saved to <span class="mono">${esc(v.folder)}</span>. MP4 with H.264 where YouTube offers it, so it plays everywhere.`}</p>
+      <div class="small error-text" id="v-error" role="alert"></div>
+    </form>${list}`;
+}
+document.addEventListener("click", (e) => {
+  const mode = e.target.closest("[data-vmode]");
+  if (!mode || !view.data || view.data.type !== "video") return;
+  const start = $("#v-start")?.value, end = $("#v-end")?.value, quality = $("#v-quality")?.value;
+  videoForm.mode = mode.dataset.vmode;
+  renderBrowse();
+  if ($("#v-start")) { $("#v-start").value = start || ""; $("#v-end").value = end || ""; }
+  if (quality) $("#v-quality").value = quality;
+});
+document.addEventListener("submit", async (e) => {
+  if (e.target.id !== "video-form") return;
+  e.preventDefault();
+  const v = view.data, btn = $("#v-go");
+  $("#v-error").textContent = "";
+  const body = { url: v.url, mode: videoForm.mode, quality: $("#v-quality").value, start: $("#v-start")?.value.trim() || null, end: $("#v-end")?.value.trim() || null, format: $("#format").value || null };
+  btn.disabled = true;
+  try {
+    const job = await api("/api/video", { method: "POST", body: JSON.stringify(body) });
+    upsertJob(job);
+    const what = body.start || body.end ? "clip" : videoForm.mode === "audio" ? "audio" : v.kind === "video" ? "video" : "videos";
+    toast(`Downloading the ${what}: “${v.title}”.`, { action: { label: "View", run: () => showTab("jobs") } });
+  } catch (err) { $("#v-error").textContent = err.message; }
+  finally { btn.disabled = false; }
+});
 
 function artistHtml(d) {
   const counts = { album: 0, single: 0, compilation: 0 };
@@ -992,7 +1100,9 @@ function renderTask(t) {
   const canFix = t.status === "failed" && job && !ACTIVE.includes(job.state);
   const fixBtn = canFix ? `<button class="btn sm ghost" style="margin-top:var(--s-1)" data-fix="${esc(t.job_id)}" data-task="${esc(t.id)}">${icon("external")}Use a YouTube link</button>` : "";
   const detail = t.status === "failed" ? `<div class="small error-text">${esc(t.error)}</div>${fixBtn}`
-    : t.status === "skipped" && t.message ? `<div class="xs faint">${esc(t.message)}</div>` : "";
+    : t.status === "skipped" && t.message ? `<div class="xs faint">${esc(t.message)}</div>`
+    : t.status === "done" && t.source ? `<div class="xs ${t.low_quality ? "warn-text" : "faint"}" title="What YouTube served, before conversion">${t.low_quality ? icon("alert") : ""}Source: ${esc(t.source)}</div>`
+    : busy && t.message ? `<div class="xs faint">${esc(t.message)}</div>` : "";
   const match = t.match ? `<a class="xs" href="${esc(t.match.url)}" target="_blank" rel="noopener" title="${esc(t.match.reason)}">YouTube ${icon("external")} <span class="tnum">match ${t.match.score}</span></a>` : "";
   return `<tr><td class="c-num tnum">${t.position}</td>
     <td><div class="t-title">${esc(t.title)}</div><div class="t-sub">${esc(t.artists.join(", "))}</div>${detail}
@@ -1132,7 +1242,7 @@ $("#tab-library").addEventListener("click", (e) => {
 $("#lib-open").addEventListener("click", () => openPath(null));
 
 // ============================================================== settings
-const SETTING_KEYS = ["output_dir", "format", "bitrate", "threads", "playlist_mode", "lyrics", "lrc", "track_template", "playlist_template"];
+const SETTING_KEYS = ["output_dir", "format", "bitrate", "threads", "playlist_mode", "lyrics", "lrc", "track_template", "playlist_template", "video_quality"];
 let savedSettings = null;
 function readForm() {
   const v = {};

@@ -61,6 +61,44 @@ def is_spotify_input(text: str) -> bool:
     return host in _SPOTIFY_HOSTS or host in SHORT_LINK_HOSTS
 
 
+# Sites people paste without "https://"; anything else needs a scheme or "www." so
+# artist names like "will.i.am" aren't mistaken for links.
+_BARE_VIDEO_HOSTS = frozenset(
+    {
+        "youtu.be",
+        "youtube.com",
+        "m.youtube.com",
+        "music.youtube.com",
+        "vimeo.com",
+        "soundcloud.com",
+        "twitch.tv",
+        "tiktok.com",
+        "x.com",
+        "twitter.com",
+        "instagram.com",
+        "facebook.com",
+        "dailymotion.com",
+        "bandcamp.com",
+        "reddit.com",
+        "bilibili.com",
+    }
+)
+
+
+def is_video_link(text: str) -> bool:
+    """A web link that isn't Spotify: a job for yt-dlp (video or audio download)."""
+    text = text.strip()
+    if not text or " " in text or is_spotify_input(text):
+        return False
+    lowered = text.lower()
+    if lowered.startswith(("http://", "https://")):
+        return bool(urlsplit(text).hostname)
+    host = _host(_with_scheme(text))
+    if lowered.startswith("www.") and "." in host:
+        return True
+    return host in _BARE_VIDEO_HOSTS or any(host.endswith("." + h) for h in _BARE_VIDEO_HOSTS)
+
+
 def is_short_link(text: str) -> bool:
     return _host(_with_scheme(text.strip())) in SHORT_LINK_HOSTS
 

@@ -9,6 +9,7 @@ leaves half-written files in the library.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import shutil
 import tempfile
@@ -23,13 +24,13 @@ from typing import Protocol
 
 from tunegrab.config import Settings
 from tunegrab.download.convert import extension
-from tunegrab.download.ytdlp import DownloadCancelled, Downloader
+from tunegrab.download.ytdlp import DownloadCancelled, Downloader, DownloadError, SourceInfo
 from tunegrab.library.archive import Archive
 from tunegrab.library.paths import render_path, template_fields, unique_path
 from tunegrab.library.playlists import playlist_file, write_m3u8
 from tunegrab.matching.matcher import Matcher
 from tunegrab.metadata.resolver import Resolver
-from tunegrab.models import Collection, Job, Match, TaskStatus, Track, TrackTask
+from tunegrab.models import Candidate, Collection, Job, Match, TaskStatus, Track, TrackTask
 from tunegrab.tagging.lyrics import Lyrics, write_lrc
 from tunegrab.urls import is_spotify_input
 
@@ -38,6 +39,9 @@ log = logging.getLogger(__name__)
 TMP_DIR_NAME = ".tunegrab-tmp"
 STALE_TMP_AGE_S = 6 * 3600
 RETRY_BACKOFF_S = 2.0
+RATE_LIMIT_PAUSE_S = 60.0  # first pause when YouTube says "too many requests"
+RATE_LIMIT_MAX_PAUSE_S = 300.0
+MAX_ALTERNATIVES = 3  # other videos to try when the chosen one is unavailable
 
 EventCallback = Callable[[Job, TrackTask | None], None]
 
@@ -81,7 +85,12 @@ class Pipeline:
     query_lookup: QueryLookup | None = None
     on_event: EventCallback | None = None
     retry_backoff: float = RETRY_BACKOFF_S
+    rate_limit_pause: float = RATE_LIMIT_PAUSE_S
     cancel_event: threading.Event = field(default_factory=threading.Event)
+    # Shared by all worker threads: no new download starts before this time.
+    _cooldown_until: float = field(default=0.0, init=False, repr=False)
+    _cooldown_strikes: int = field(default=0, init=False, repr=False)
+    _cooldown_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     # --- building jobs -------------------------------------------------------------
     def build_job(self, text: str) -> Job:
@@ -178,9 +187,33 @@ class Pipeline:
                     task.status = TaskStatus.SKIPPED
                     task.message = "cancelled"
             self._finish_playlist(job)
+            with contextlib.suppress(OSError):  # only if empty: no stray folder in the library
+                tmp_root.rmdir()
             job.finished_at = datetime.now(UTC)
             self._emit(job)
         return job
+
+    # --- YouTube rate limits ------------------------------------------------------------
+    def _rate_limited(self) -> float:
+        """YouTube said "slow down": pause every worker, longer each time it repeats."""
+        with self._cooldown_lock:
+            self._cooldown_strikes += 1
+            pause = min(
+                RATE_LIMIT_MAX_PAUSE_S, self.rate_limit_pause * 2.0 ** (self._cooldown_strikes - 1)
+            )
+            self._cooldown_until = max(self._cooldown_until, time.monotonic() + pause)
+            return pause
+
+    def _wait_for_cooldown(self, job: Job, task: TrackTask) -> None:
+        while True:
+            with self._cooldown_lock:
+                remaining = self._cooldown_until - time.monotonic()
+            if remaining <= 0:
+                return
+            task.message = f"YouTube asked to slow down: waiting {remaining:.0f} s"
+            self._emit(job, task)
+            if self.cancel_event.wait(min(remaining, 5.0)):
+                raise Cancelled()
 
     def _finish_playlist(self, job: Job) -> None:
         collection = job.collection
@@ -331,9 +364,7 @@ class Pipeline:
                 else:
                     self._emit(job, task)
 
-            audio = self.downloader.download(
-                candidate.video_id, Path(tmp), progress=progress, cancel=self.cancel_event
-            )
+            audio, candidate = self._download(job, task, candidate, Path(tmp), progress)
 
             # 5. tag (cover art + lyrics), still inside the temp dir
             self._check_cancel()
@@ -360,6 +391,64 @@ class Pipeline:
         self.archive.record_download(track, target, candidate.video_id, self.settings.format)
         self.archive.resolve_failures(track.key)
         self._set(job, task, TaskStatus.DONE)
+
+    def _download(
+        self,
+        job: Job,
+        task: TrackTask,
+        candidate: Candidate,
+        dest: Path,
+        progress: Callable[[float, str], None],
+    ) -> tuple[Path, Candidate]:
+        """Download ``candidate``; if YouTube says it's unavailable (removed, private,
+        blocked in this country, age-gated) try the next-best match instead."""
+        tried: set[str] = set()
+        while True:
+            self._wait_for_cooldown(job, task)
+
+            def on_source(info: SourceInfo) -> None:
+                task.source = info.label
+                task.low_quality = info.low_quality
+
+            try:
+                audio = self.downloader.download(
+                    candidate.video_id,
+                    dest,
+                    progress=progress,
+                    cancel=self.cancel_event,
+                    source=on_source,
+                )
+            except DownloadCancelled:
+                raise
+            except DownloadError as exc:
+                if exc.kind == "rate_limited":
+                    pause = self._rate_limited()
+                    log.warning("YouTube rate limit; pausing downloads for %.0f s", pause)
+                    raise TaskFailed(f"YouTube asked to slow down ({exc})") from exc
+                if exc.kind != "unavailable" or candidate.source == "manual":
+                    raise
+                tried.add(candidate.video_id)
+                if len(tried) > MAX_ALTERNATIVES:
+                    raise
+                alternative = self.matcher.match(task.track, exclude=tried)
+                if alternative.candidate is None or not alternative.accepted(
+                    self.settings.match_threshold
+                ):
+                    raise TaskFailed(
+                        f"{exc} (and no other match scored {self.settings.match_threshold:.0f}+)",
+                        retryable=False,
+                    ) from exc
+                log.info(
+                    "%s unavailable (%s); trying %s", candidate.video_id, exc, alternative.reason
+                )
+                task.match = alternative
+                candidate = alternative.candidate
+                task.message = "first choice unavailable: trying the next match"
+                self._set(job, task, TaskStatus.DOWNLOADING, task.message)
+                continue
+            with self._cooldown_lock:
+                self._cooldown_strikes = 0
+            return audio, candidate
 
     def _cover(self, url: str | None) -> bytes | None:
         if not url or self.cover_fetcher is None:

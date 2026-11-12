@@ -283,3 +283,27 @@ def test_browser_opens_only_when_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli.time, "sleep", lambda s: None)
     cli._open_when_ready("127.0.0.1", 8765, "http://127.0.0.1:8765/")
     assert opened == ["http://127.0.0.1:8765/"]
+
+
+def test_video_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from tunegrab import video
+    from tunegrab.video import VideoEntry, VideoProbe
+
+    entry = VideoEntry("dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ", "Song", "Chan", 213)
+    found = VideoProbe("u", "video", "Song", "Chan", "Youtube", [entry])
+    monkeypatch.setattr(cli, "probe", lambda url, cookies=None: found)
+
+    def fake_download(self: Any, url: str, dest: Path, progress: Any = None, cancel: Any = None):  # type: ignore[no-untyped-def]
+        dest.mkdir(parents=True, exist_ok=True)
+        out = dest / "x.mp4"
+        out.write_bytes(b"v")
+        return out, "1080p H.264 + AAC 130 kbps", False
+
+    monkeypatch.setattr(video.VideoDownloader, "download", fake_download)
+    monkeypatch.setattr(video, "cut_clip", lambda path, options, cancel: path)
+    result = invoke("video", "https://youtu.be/dQw4w9WgXcQ", "-o", str(tmp_path), "-s", "0:10")
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "Chan" / "Song (clip 0m10s-end) [dQw4w9WgXcQ].mp4").exists()
+    assert "1080p H.264" in result.output
+    bad = invoke("video", "https://youtu.be/dQw4w9WgXcQ", "-o", str(tmp_path), "-s", "9:00")
+    assert bad.exit_code == 1 and "only 3:33 long" in bad.output

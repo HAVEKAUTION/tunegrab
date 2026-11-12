@@ -42,7 +42,11 @@ class Matcher:
             matches.append(Match(track=track, candidate=candidate, score=value, reason=reason))
         return sorted(matches, key=lambda m: m.score, reverse=True)
 
-    def match(self, track: Track, use_cache: bool = True) -> Match:
+    def match(self, track: Track, use_cache: bool = True, exclude: set[str] | None = None) -> Match:
+        """Best candidate for ``track``. ``exclude`` skips video IDs that already failed
+        (e.g. unavailable in this country); the cache is bypassed when it's given."""
+        if exclude:
+            use_cache = False
         if use_cache and self.cache is not None:
             hit = self.cache.get_match(track.key)
             if hit is not None:
@@ -60,6 +64,8 @@ class Matcher:
                 log.info("%s search failed for %s: %s", provider.name, track.display, exc)
                 errors.append(str(exc))
                 continue
+            if exclude:
+                candidates = [c for c in candidates if c.video_id not in exclude]
             ranked = self.rank(track, candidates)
             if ranked and (best is None or ranked[0].score > best.score):
                 best = ranked[0]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from datetime import date
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 from typing import Any
@@ -101,19 +102,56 @@ def test_deno_present(monkeypatch: pytest.MonkeyPatch) -> None:
         doctor.subprocess, "run", MagicMock(return_value=_completed("deno 2.5.0 (stable)\nv8\n"))
     )
 
-    result = doctor.check_deno()
+    result = doctor.check_js_runtime()
 
-    assert seen == ["deno"]
+    assert seen == ["deno", "deno"]  # probe, then run
     assert result.status is Status.OK
-    assert result.name == "Deno"
-    assert result.detail == "deno 2.5.0 (stable)"
+    assert result.name == "JS runtime"
+    assert result.detail == "Deno: deno 2.5.0 (stable)"
 
 
-def test_deno_missing_hint_mentions_js_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_js_runtime_missing_hint_mentions_js_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(doctor.shutil, "which", lambda _name: None)
-    result = doctor.check_deno()
+    result = doctor.check_js_runtime()
     assert result.status is Status.FAIL
-    assert "JS runtime" in result.hint
+    assert "JS runtime" in result.hint and "none found" in result.detail
+
+
+def test_js_runtime_falls_back_to_node_when_deno_is_too_old(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        doctor.shutil, "which", lambda name: f"/bin/{name}" if name in ("deno", "node") else None
+    )
+    outputs = {"/bin/deno": "deno 2.1.4 (stable)", "/bin/node": "v24.21.0"}
+    monkeypatch.setattr(
+        doctor.subprocess,
+        "run",
+        lambda args, **_kw: _completed(outputs[args[0]]),
+    )
+    result = doctor.check_js_runtime()
+    assert result.status is Status.OK and result.detail == "Node.js: v24.21.0"
+
+
+def test_js_runtime_all_too_old(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/bin/x" if name == "node" else None)
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *_a, **_kw: _completed("v20.11.0"))
+    result = doctor.check_js_runtime()
+    assert result.status is Status.FAIL and "need 22.0.0+" in result.detail
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("deno 2.9.8 (stable, release, x86_64-pc-windows-msvc)", (2, 9, 8)),
+        ("v24.21.0", (24, 21, 0)),
+        ("1.2", (1, 2, 0)),
+        ("QuickJS version 2024-01-13", (2024, 1, 13)),
+        ("no digits", None),
+    ],
+)
+def test_parse_version(text: str, expected: tuple[int, int, int] | None) -> None:
+    assert doctor.parse_version(text) == expected
 
 
 def test_executable_version_on_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -163,9 +201,21 @@ def test_executable_fails_to_run(monkeypatch: pytest.MonkeyPatch, exc: Exception
 
 def test_ytdlp_installed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(doctor, "package_version", lambda _name: "2026.10.26")
-    result = doctor.check_ytdlp()
+    result = doctor.check_ytdlp(today=date(2026, 11, 13))
     assert result.status is Status.OK
     assert result.detail == "2026.10.26"
+
+
+def test_ytdlp_stale(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(doctor, "package_version", lambda _name: "2026.6.1")
+    result = doctor.check_ytdlp(today=date(2026, 11, 13))
+    assert result.status is Status.WARN
+    assert result.detail == "2026.6.1 (165 days old)" and "Update yt-dlp" in result.hint
+
+
+def test_ytdlp_odd_version_is_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(doctor, "package_version", lambda _name: "2026.10.26.dev0+abc")
+    assert doctor.check_ytdlp(today=date(2026, 11, 13)).status is Status.OK
 
 
 def test_ytdlp_missing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -265,7 +315,7 @@ def test_run_all_covers_every_check(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert names == [
         "Python",
         "ffmpeg",
-        "Deno",
+        "JS runtime",
         "yt-dlp",
         "yt-dlp JS solver",
         "Output dir writable",

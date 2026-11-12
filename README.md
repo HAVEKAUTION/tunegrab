@@ -3,12 +3,13 @@
 # 🎵 TuneGrab
 
 **Pick the albums and songs you want from Spotify, and get a tidy, fully tagged music library on your own drive.**
+<br>Plus videos and clips from YouTube and other sites.
 
-![Version](https://img.shields.io/badge/version-0.3.0-22c55e)
+![Version](https://img.shields.io/badge/version-0.4.0-22c55e)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776ab)
 ![Platforms](https://img.shields.io/badge/runs%20on-Windows%20%7C%20macOS%20%7C%20Linux-555)
 ![Local only](https://img.shields.io/badge/runs-100%25%20local-0ea5e9)
-![Tests](https://img.shields.io/badge/tests-329%20passing-22c55e)
+![Tests](https://img.shields.io/badge/tests-394%20passing-22c55e)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 
 [Features](#-features) · [Install](#-install) · [Using the app](#%EF%B8%8F-using-the-app) · [Command line](#-command-line) · [Settings](#%EF%B8%8F-settings) · [FAQ](#-faq) · [Troubleshooting](#-troubleshooting)
@@ -38,6 +39,9 @@
 
 Everything runs on your own computer. Spotify is used **only** for track information; the
 audio comes from YouTube. TuneGrab never touches Spotify's own audio streams.
+
+Paste a **YouTube (or other video) link** instead and TuneGrab saves the video as an MP4,
+just a clip of it, or only its audio.
 
 ---
 
@@ -81,12 +85,36 @@ audio comes from YouTube. TuneGrab never touches Spotify's own audio streams.
 - Each song links to the YouTube video it used, with a **match score** (0–100) and the reason.
 - Several songs download at once (you choose how many).
 - Anything already in your library is skipped, so it's safe to stop and start again.
+- Each finished song shows what YouTube actually served (e.g. *Opus 129 kbps*), and warns
+  if only a low-quality copy was available.
+- If the chosen video is unavailable (removed, private, blocked in your country), TuneGrab
+  tries the next-best match by itself.
+- If YouTube says "slow down", every download pauses for a minute (longer if it repeats)
+  instead of failing one after another.
 - Failed songs show why. **Retry failed songs** works even after a restart.
 - TuneGrab couldn't find a song? Press **Use a YouTube link** next to it, paste the right
   video and it downloads that one, and remembers it for next time.
 - Download history is kept between sessions.
 
 <img src="docs/images/downloads.jpg" alt="The Downloads screen with an album half downloaded, showing match scores and per-song status" width="800">
+
+</details>
+
+<details>
+<summary><b>🎬 Videos and clips</b></summary>
+
+<br>
+
+- Paste a link from **YouTube** or any of the
+  [sites yt-dlp supports](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md)
+  (Vimeo, SoundCloud, Twitch clips, Bandcamp, ...) into **Get music** and press **Browse**.
+- Save it as a **video** (MP4, up to 4K) or **audio only** (in your audio format, into your
+  music folder).
+- Cut a **clip**: type a start and end time (`1:23` to `2:05`). The cut is frame-accurate.
+- Playlists work too: every video in it is downloaded, one after another.
+- MP4 files use H.264 + AAC wherever YouTube offers it, so they play on phones, TVs and
+  Windows' Photos app. AI-upscaled "super resolution" copies are skipped.
+- Videos go to a `Videos` folder inside your music folder: `Videos/Channel/Title [id].mp4`.
 
 </details>
 
@@ -99,6 +127,7 @@ audio comes from YouTube. TuneGrab never touches Spotify's own audio streams.
 - Embedded **cover art**.
 - **Lyrics** from LRCLIB (free, no account), embedded in the file, plus an optional synced `.lrc` file.
 - Choose **MP3** (128–320 kbps), **M4A**, **Opus** or **FLAC**.
+- Uses YouTube's normal audio, not its "stable volume" copy (which squashes the dynamics).
 - Windows-safe file names, with your own naming pattern if you want one.
 - Playlists also get an `.m3u8` playlist file (or their own folder).
 
@@ -215,8 +244,8 @@ when you type `shell:startup` in the Run box (`Win+R`).
 brew install uv ffmpeg deno
 git clone https://github.com/HAVEKAUTION/tunegrab.git
 cd tunegrab
-uv sync
-uv run tunegrab serve        # opens http://127.0.0.1:8765 in your browser
+uv sync --no-dev                    # the app only, without developer tools
+uv run --no-dev tunegrab serve      # opens http://127.0.0.1:8765 in your browser
 ```
 
 </details>
@@ -232,8 +261,8 @@ sudo apt install ffmpeg                             # or your distro's package m
 curl -fsSL https://deno.land/install.sh | sh        # Deno
 git clone https://github.com/HAVEKAUTION/tunegrab.git
 cd tunegrab
-uv sync
-uv run tunegrab serve
+uv sync --no-dev
+uv run --no-dev tunegrab serve
 ```
 
 </details>
@@ -249,8 +278,9 @@ In the app, open **Settings → System**: every row should be green. Or from a t
 uv run tunegrab doctor
 ```
 
-It checks Python, ffmpeg, Deno, yt-dlp, your music folder and any Spotify credentials, and
-says exactly what to fix.
+It checks Python, ffmpeg, a JavaScript runtime (Deno, or Node.js 22+ / Bun / QuickJS),
+yt-dlp (and warns when it's more than two months old), your music folder and any Spotify
+credentials, and says exactly what to fix.
 
 </details>
 
@@ -279,7 +309,33 @@ git pull                          # get the latest TuneGrab
 uv run tunegrab doctor --update   # update yt-dlp (do this whenever YouTube downloads start failing)
 ```
 
-The launcher re-syncs everything else by itself on the next start.
+Or in the app: **Settings → System → Update yt-dlp**, then restart TuneGrab. The launcher
+re-syncs everything else by itself on the next start.
+
+</details>
+
+<details>
+<summary><b>🧹 Disk space and uninstalling</b></summary>
+
+<br>
+
+Besides your music, TuneGrab keeps only a few small things:
+
+| What | Where (Windows) | Size |
+|---|---|---|
+| The app and its Python packages | the `tunegrab` folder (`.venv` inside it) | about 80 MB |
+| Settings, download history, logs | `%LOCALAPPDATA%\tunegrab` | usually under 5 MB (the log rotates at 2 MB × 3) |
+| uv's package cache | `%LOCALAPPDATA%\uv\cache` | shared by every uv project; can grow large |
+| Python itself (installed by uv) | `%APPDATA%\uv\python` | about 75 MB per version |
+
+**Free up space:** **Settings → Storage → Free up space** (or `tunegrab clean`) removes
+unfinished downloads, old log files and yt-dlp's cache, and compacts the history database.
+Tick the uv option to also prune uv's package cache. Your music, settings and history stay.
+
+**Uninstall:** delete the `tunegrab` folder and `%LOCALAPPDATA%\tunegrab` (on macOS
+`~/Library/Application Support/tunegrab` and `~/Library/Logs/tunegrab`; on Linux
+`~/.config/tunegrab`, `~/.local/share/tunegrab` and `~/.local/state/tunegrab`). Run
+`uv cache clean` if you don't use uv for anything else. Your music folder is never touched.
 
 </details>
 
@@ -311,6 +367,22 @@ The launcher re-syncs everything else by itself on the next start.
 Paste the Spotify link into **Get music** and press **Download now** to skip the preview, or
 **Browse** to see and pick the tracks first. For one song you can also type
 `Artist - Title` and press **Download now**.
+
+</details>
+
+<details>
+<summary><b>Download a video, a clip of one, or just its audio</b></summary>
+
+<br>
+
+1. Paste a YouTube link (or one from another video site) into **Get music** and press **Browse**.
+2. Choose **Video (MP4)** and a quality, or **Audio only**.
+3. For a clip, fill in **Clip from** and **to** (`1:23`, `83` or `1:02:03` all work). Leave
+   them empty for the whole video.
+4. Press **Download**. Progress shows on **Downloads** like any other job.
+
+**Download now** on a video link saves its audio straight into your music folder. From a
+terminal: `tunegrab video <link>`, with `--audio`, `-q 720`, `--start 1:23 --end 2:05`.
 
 </details>
 
@@ -369,6 +441,9 @@ tunegrab download https://open.spotify.com/album/2noRn2Aes5aoNVsU6iWThc
 tunegrab download <playlist-url> -f m4a -o D:\Music             # choose format and folder
 tunegrab download --from-file my-links.txt                      # one link per line
 tunegrab download --from-file Liked_Songs.csv                   # an Exportify CSV
+tunegrab video https://youtu.be/dQw4w9WgXcQ                     # the video, as MP4 (1080p)
+tunegrab video <link> --start 0:43 --end 1:10 -q 720            # just a clip
+tunegrab video <link> --audio -f opus                           # only the audio
 tunegrab serve                                                  # start the app
 ```
 
@@ -381,6 +456,7 @@ tunegrab serve                                                  # start the app
 |---|---|
 | `download <url-or-query>... [--from-file list.txt]` | The main command. Accepts several inputs; `--from-file` reads one per line (`#` comments OK), or a `.csv` export (Exportify etc.). Options: `-f/--format mp3\|m4a\|opus\|flac`, `-b/--bitrate`, `-o/--out`, `-t/--threads`, `--lyrics/--no-lyrics`, `--lrc` (synced `.lrc` file), `--playlist-mode m3u\|folder`. |
 | `get "artist - title"` | Download the top search result. |
+| `video <link>` | Download a video (MP4) from YouTube or another yt-dlp site, or a playlist of them. `--audio` for only the audio (`-f` format), `-q/--quality best\|2160\|1440\|1080\|720\|480\|360`, `-s/--start` and `-e/--end` for a clip, `-o/--out` for the folder. |
 | `search "query"` | Show results and pick one interactively. |
 | `info <url>` | List the tracks behind a link without downloading. |
 | `match <url> [--threshold N] [--no-cache]` | Dry run: which YouTube video each track would use, its score and why. |
@@ -392,6 +468,7 @@ tunegrab serve                                                  # start the app
 | `login` / `logout` | Optional Spotify login for private playlists and Liked Songs. |
 | `serve [--host] [--port] [--no-open]` | Start the app on `127.0.0.1:8765`. |
 | `doctor [--update]` | Check everything is installed; `--update` upgrades yt-dlp. |
+| `clean [--dry-run] [--uv-cache]` | Show what TuneGrab keeps on disk and free space (unfinished downloads, old logs, yt-dlp cache, compact the history). Never touches your music. |
 
 Global flags: `--version`, `-v/--verbose` (logs always go to a rotating file too).
 
@@ -420,6 +497,8 @@ setting and where its value came from.
 | `playlist_mode` | `m3u` | `m3u` playlist file, or `folder` per playlist |
 | `match_threshold` | `70` | Minimum match score (0–100) |
 | `cookies_from_browser` | — | e.g. `firefox`, for age-restricted videos |
+| `video_quality` | `1080` | Highest video resolution: `best`, `2160` … `360` |
+| `video_dir` | `<music folder>/Videos` | Where videos are saved |
 | `track_template` | see below | File naming pattern |
 
 </details>
@@ -493,6 +572,23 @@ YouTube audio is lossy (typically around 128–160 kbps Opus/AAC). **M4A** and *
 original stream untouched. **MP3** and **FLAC** re-encode it for compatibility, but can't add
 quality that isn't there.
 
+TuneGrab always picks YouTube's best normal audio stream (never the volume-levelled
+"stable volume" copy) and shows on **Downloads** what each song was made from. When YouTube
+only offers a low-quality copy (a sign of trouble on its side), TuneGrab retries as a
+different YouTube player before settling for it, and flags the song if it had to.
+
+</details>
+
+<details>
+<summary><b>What video quality do I get?</b></summary>
+
+<br>
+
+The best YouTube has up to the quality you pick (1080p by default). Up to 1080p that's H.264
+video with AAC audio in an MP4 that plays anywhere; for 1440p and 4K YouTube only has VP9 or
+AV1, which most modern devices also play. Clips are re-encoded at near-lossless quality so
+they start exactly where you asked.
+
 </details>
 
 <details>
@@ -534,7 +630,8 @@ Logs stay on your PC (**Settings → About** shows where).
 It depends where you live. In Australia, downloading copyrighted music from YouTube without
 permission isn't covered by the format-shifting exception (which only applies to recordings
 you already legitimately own), and it's against YouTube's terms. Lots of people do it for
-personal use, but it's your call. TuneGrab deliberately **does not** decrypt Spotify audio.
+personal use, but it's your call. The same goes for videos: only download ones you're
+allowed to. TuneGrab deliberately **does not** decrypt Spotify audio.
 
 </details>
 
@@ -558,13 +655,15 @@ discography across several artists in one go.
 
 <br>
 
-YouTube changes often and yt-dlp keeps up. Run:
+YouTube changes often and yt-dlp keeps up. In the app: **Settings → System → Update
+yt-dlp**, then restart TuneGrab. Or from a terminal:
 
 ```powershell
 uv run tunegrab doctor --update
 ```
 
-Also check Deno is installed (`deno --version`); YouTube downloads need it.
+Also check a JavaScript runtime is installed (`deno --version`); YouTube downloads need one.
+**Settings → System** warns when yt-dlp is more than two months old.
 
 </details>
 
@@ -573,8 +672,10 @@ Also check Deno is installed (`deno --version`); YouTube downloads need it.
 
 <br>
 
-YouTube sometimes asks for this, especially on VPNs or shared connections. Turn off the VPN,
-or let TuneGrab use your browser's YouTube cookies:
+YouTube sometimes asks for this, especially on VPNs or shared connections, or after a lot
+of downloads in a row. TuneGrab pauses all downloads for a minute when it happens (longer if
+it keeps happening), then carries on. If it doesn't clear, turn off the VPN, lower
+**Songs at once**, or let TuneGrab use your browser's YouTube cookies:
 
 ```powershell
 uv run tunegrab config set cookies_from_browser firefox
@@ -651,8 +752,8 @@ Python 3.11+, managed with **uv**. Typer + Rich (CLI), httpx, pydantic, FastAPI 
 ytmusicapi + rapidfuzz (matching), yt-dlp, mutagen, SQLite.
 
 ```powershell
-uv sync                         # install everything
-uv run pytest -q                # 329 unit tests (network mocked)
+uv sync                         # install everything, including the developer tools
+uv run pytest -q                # unit tests (network mocked)
 uv run pytest -m live -q        # real-network smoke tests
 uv run ruff check --fix . ; uv run ruff format . ; uv run mypy src
 uv run python scripts/check_design.py   # UI colour-contrast check
@@ -662,7 +763,9 @@ uv run python scripts/check_design.py   # UI colour-contrast check
 |---|---|
 | `src/tunegrab/metadata/` | Spotify Web API and public-page providers |
 | `src/tunegrab/matching/` | YouTube Music / YouTube search and scoring |
-| `src/tunegrab/download/`, `tagging/` | yt-dlp, ffmpeg and mutagen |
+| `src/tunegrab/download/`, `tagging/` | yt-dlp (with YouTube workarounds), ffmpeg and mutagen |
+| `src/tunegrab/video.py` | Video, clip and audio-from-video downloads |
+| `src/tunegrab/storage.py` | Disk usage report and `tunegrab clean` |
 | `src/tunegrab/library/` | SQLite archive, history, overrides |
 | `src/tunegrab/web/` | FastAPI app and the single-page UI |
 | `docs/ARCHITECTURE.md` | Design |

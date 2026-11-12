@@ -30,6 +30,7 @@ SECRET_KEYS = frozenset({"spotify_client_secret"})
 
 AudioFormat = Literal["mp3", "m4a", "opus", "flac"]
 PlaylistMode = Literal["m3u", "folder"]
+VideoQuality = Literal["best", "2160", "1440", "1080", "720", "480", "360"]
 
 DEFAULT_TRACK_TEMPLATE = "{album_artist}/{album} ({year})/{track_number:02d} - {title}.{ext}"
 DEFAULT_PLAYLIST_TEMPLATE = "Playlists/{playlist}/{position:03d} - {artist} - {title}.{ext}"
@@ -123,6 +124,8 @@ class Settings(BaseSettings):
     # e.g. "firefox" / "chrome": lets yt-dlp use your browser's YouTube cookies for
     # age-restricted videos.
     cookies_from_browser: str | None = None
+    video_quality: VideoQuality = "1080"  # highest video height to download
+    video_dir: Path | None = None  # default: <output_dir>/Videos
 
     spotify_client_id: str | None = Field(default=None, validation_alias="SPOTIFY_CLIENT_ID")
     spotify_client_secret: SecretStr | None = Field(
@@ -171,6 +174,12 @@ class Settings(BaseSettings):
     @property
     def resolved_output_dir(self) -> Path:
         return self.output_dir.expanduser().resolve()
+
+    @property
+    def resolved_video_dir(self) -> Path:
+        if self.video_dir is not None:
+            return self.video_dir.expanduser().resolve()
+        return self.resolved_output_dir / "Videos"
 
 
 # --- reading / writing config.toml -------------------------------------------

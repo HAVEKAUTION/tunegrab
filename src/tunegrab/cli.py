@@ -1,8 +1,9 @@
-"""Typer app: download, get, info, match, search, sync, retry, fix, config, login, serve,
+"""Typer app: download, get, video, info, match, search, sync, retry, fix, config, login, serve,
 status, doctor."""
 
 from __future__ import annotations
 
+import asyncio
 import concurrent.futures
 import logging
 import socket
@@ -20,12 +21,13 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from tunegrab import __version__
+from tunegrab import __version__, storage
 from tunegrab.config import (
     SECRET_KEYS,
     AudioFormat,
     PlaylistMode,
     Settings,
+    VideoQuality,
     coerce_setting,
     config_file,
     keyring_set,
@@ -34,6 +36,7 @@ from tunegrab.config import (
 )
 from tunegrab.doctor import CheckResult, Status, run_all, update_ytdlp
 from tunegrab.download.convert import FORMAT_HELP
+from tunegrab.download.ytdlp import DownloadError
 from tunegrab.imports import CsvImportError, collection_from_csv
 from tunegrab.library.paths import TemplateError, validate_template
 from tunegrab.library.playlists import playlist_file
@@ -53,6 +56,15 @@ from tunegrab.ui import (
     tracks_table,
 )
 from tunegrab.urls import InvalidURLError, SpotifyRef, parse_spotify_url, parse_youtube_id
+from tunegrab.video import (
+    VideoError,
+    VideoOptions,
+    VideoPipeline,
+    build_job,
+    check_clip,
+    parse_time,
+    probe,
+)
 
 log = logging.getLogger(__name__)
 
@@ -330,6 +342,69 @@ def get(
             if task.path:
                 console.print(f"Saved: [bold]{escape(task.path)}[/]")
     raise typer.Exit(_exit_code(jobs))
+
+
+@app.command()
+def video(
+    url: Annotated[
+        str, typer.Argument(help="Video or playlist link: YouTube or any site yt-dlp supports.")
+    ],
+    audio: Annotated[
+        bool, typer.Option("--audio", "-a", help="Only the audio (in --format).")
+    ] = False,
+    quality: Annotated[
+        VideoQuality | None,
+        typer.Option("--quality", "-q", help="Highest resolution: best, 2160 ... 360."),
+    ] = None,
+    start: Annotated[
+        str | None, typer.Option("--start", "-s", help="Clip start, e.g. 1:23 (single video).")
+    ] = None,
+    end: Annotated[
+        str | None, typer.Option("--end", "-e", help="Clip end, e.g. 2:05 (single video).")
+    ] = None,
+    fmt: FormatOpt = None,
+    out: Annotated[
+        Path | None, typer.Option("--out", "-o", help="Video folder (default: <library>/Videos).")
+    ] = None,
+) -> None:
+    """Download a video (MP4), a clip of one, or just its audio."""
+    settings = load_settings(format=fmt, video_quality=quality, video_dir=out)
+    try:
+        clip_start, clip_end = parse_time(start), parse_time(end)
+        with console.status("Looking up the link ..."):
+            found = probe(url, settings.cookies_from_browser)
+        if (clip_start is not None or clip_end is not None) and found.kind != "video":
+            raise VideoError("--start/--end work on a single video, not a playlist.")
+        duration = found.entries[0].duration_s if found.kind == "video" else None
+        clip_start, clip_end = check_clip(clip_start, clip_end, duration)
+    except (VideoError, DownloadError) as exc:
+        raise _fail(str(exc)) from exc
+    options = VideoOptions(
+        mode="audio" if audio else "video",
+        quality=settings.video_quality,
+        start=clip_start,
+        end=clip_end,
+    )
+    job, entries = build_job(found, options)
+    display = LiveProgress(console)
+    pipeline = VideoPipeline(settings, options, entries, on_event=display.on_event)
+    with display:
+        display.start_job(job)
+        try:
+            asyncio.run(pipeline.run(job))
+        except KeyboardInterrupt:
+            pipeline.cancel()
+            console.print("[yellow]Interrupted.[/]")
+            raise typer.Exit(130) from None
+    console.print(summary_table([job]))
+    failed = failures_table([job])
+    if failed is not None:
+        console.print(failed)
+    for task in job.tasks:
+        if task.path and task.status == TaskStatus.DONE:
+            detail = f" [dim]({escape(task.source)})[/]" if task.source else ""
+            console.print(f"Saved: [bold]{escape(task.path)}[/]{detail}")
+    raise typer.Exit(_exit_code([job]))
 
 
 @app.command()
@@ -879,6 +954,42 @@ def render_checks(results: list[CheckResult]) -> Table:
             detail += f"\n[dim]{escape(result.hint)}[/]"
         table.add_row(badge, f"[{colour}]{escape(result.name)}[/]", detail)
     return table
+
+
+@app.command()
+def clean(
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", "-n", help="Only show what would be freed.")
+    ] = False,
+    uv_cache: Annotated[
+        bool,
+        typer.Option("--uv-cache", help="Also prune uv's package cache (shared by uv projects)."),
+    ] = False,
+) -> None:
+    """Free disk space: unfinished downloads, old logs, the yt-dlp cache; compact history.
+
+    Never touches your music, settings or download history. Don't run it while TuneGrab
+    is downloading."""
+    settings = load_settings()
+    with console.status("Measuring ..."):
+        items = storage.report(settings, include_uv=uv_cache)
+    table = Table(title="TuneGrab on disk (besides your music)", title_justify="left")
+    table.add_column("What")
+    table.add_column("Size", justify="right")
+    table.add_column("Where", overflow="fold")
+    for item in items:
+        note = f"\n[dim]{escape(item.note)}[/]" if item.note else ""
+        table.add_row(escape(item.label), storage.human_size(item.size), escape(item.path) + note)
+    console.print(table)
+    if dry_run:
+        return
+    keys = [i.key for i in items if i.cleanable]
+    with console.status("Cleaning ..."):
+        results = storage.clean(settings, keys)
+    freed = sum(r.freed for r in results)
+    for result in results:
+        console.print(f"  {escape(result.key)}: {escape(result.detail)}")
+    console.print(f"[green]Freed {storage.human_size(freed)}.[/]")
 
 
 @app.command()

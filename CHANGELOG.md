@@ -2,6 +2,41 @@
 
 All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
 
+## 0.4.0 — 2026-11-13
+
+Videos and clips, more dependable YouTube downloads, and a smaller footprint. Built from a
+read through yt-dlp's issue tracker. No new dependencies.
+
+### Added
+- **Videos and clips**: paste a YouTube (or any yt-dlp-supported site) link into
+  **Get music** to save the video as MP4 (best up to 4K; 1080p by default), only its audio,
+  or a clip between two times. Playlists download every video. Also `tunegrab video`.
+  Clips are cut by TuneGrab's own ffmpeg step, frame-accurate (avoids yt-dlp#16546).
+- **Settings → Video** (quality) and `video_dir`; videos go to `<music folder>/Videos`.
+- **Settings → System → Update yt-dlp**, and a warning when yt-dlp is over 60 days old.
+- **Settings → Storage** and `tunegrab clean`: see what TuneGrab keeps on disk and free it
+  (unfinished downloads, old logs, yt-dlp's cache, database compaction, optionally uv's cache).
+- Each finished song shows the source it was made from (e.g. *Opus 129 kbps*).
+- README: disk space and uninstall guide.
+
+### Changed
+- YouTube's "stable volume" (DRC) audio is never chosen when the normal stream exists
+  (yt-dlp#8259); AI-upscaled "super resolution" video is skipped (yt-dlp#15433).
+- Every JavaScript runtime yt-dlp supports is enabled (Deno, Node.js 22+, Bun, QuickJS),
+  not only Deno, whose development is winding down (yt-dlp#17799). `doctor` accepts any.
+- When YouTube answers 403 / "unplayable" / only a low-quality format, the download is
+  retried as other YouTube players before giving up (yt-dlp#17989, #17389, #17542).
+  A genuinely low-quality upload is accepted straight away.
+- A video that's unavailable (removed, private, region-blocked, age-gated) is replaced by
+  the next-best match instead of failing the song.
+- "Too many requests" / "confirm you're not a bot" pauses all downloads (60 s, doubling to
+  5 min) instead of failing songs one after another.
+- The launcher installs and runs without the developer tools (`--no-dev`): ~60 MB less.
+- The empty `.tunegrab-tmp` folder is removed from the music folder after each job.
+- yt-dlp's disk cache is off: measured, it saved no time per song.
+- Updating yt-dlp only touches yt-dlp's packages, never TuneGrab's own launcher file
+  (which Windows locks while the app runs).
+
 ## 0.3.0 — 2026-11-13
 
 Ideas and bug reports from other downloaders' issue trackers, checked against TuneGrab.

@@ -255,3 +255,88 @@ def test_csv_import_job(client: TestClient) -> None:
     assert wait_for(client, bad.json()["id"], ("error",))["error"].startswith("The CSV needs")
     both = client.post("/api/jobs", json={"csv_text": text, "url": ALBUM})
     assert both.status_code == 400
+
+
+def test_update_ytdlp(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+
+    def fake_update() -> tuple[bool, str]:
+        calls.append(1)
+        return (len(calls) == 1, "Updated yt-dlp v2026.10.26 -> v2026.11.12")
+
+    monkeypatch.setattr(web_app, "update_ytdlp", fake_update)
+    ok = client.post("/api/system/update-ytdlp")
+    assert ok.status_code == 200 and ok.json()["ok"] is True
+    failed = client.post("/api/system/update-ytdlp")
+    assert failed.status_code == 500 and "Update failed" in failed.json()["detail"]
+
+
+def test_done_tasks_report_source_quality(client: TestClient) -> None:
+    job = wait_for(
+        client, client.post("/api/jobs", json={"url": ALBUM}).json()["id"], ("finished",)
+    )
+    task = job["tasks"][0]
+    assert task["source"] == "Opus 129 kbps" and task["low_quality"] is False
+
+
+def test_video_link_browse_and_download(
+    client: TestClient, services: FakeServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tunegrab import video
+    from tunegrab.video import VideoEntry, VideoProbe
+
+    probes: list[str] = []
+    entry = VideoEntry("dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ", "Song", "Chan", 213)
+
+    def fake_probe(url: str, cookies: str | None = None) -> VideoProbe:
+        probes.append(url)
+        return VideoProbe(url, "video", "Song", "Chan", "Youtube", [entry], heights=[1080, 720])
+
+    downloaded: list[tuple[str, str]] = []
+
+    def fake_download(self: Any, url: str, dest: Path, progress: Any = None, cancel: Any = None):  # type: ignore[no-untyped-def]
+        downloaded.append((url, self.options.mode))
+        dest.mkdir(parents=True, exist_ok=True)
+        out = dest / f"x.{self.extension}"
+        out.write_bytes(b"v")
+        return out, "720p H.264 + AAC 130 kbps", False
+
+    monkeypatch.setattr(web_app, "probe", fake_probe)
+    monkeypatch.setattr(video.VideoDownloader, "download", fake_download)
+    clips: list[tuple[float | None, float | None]] = []
+    monkeypatch.setattr(
+        video,
+        "cut_clip",
+        lambda path, options, cancel: clips.append((options.start, options.end)) or path,
+    )
+
+    url = "https://youtu.be/dQw4w9WgXcQ"
+    data = client.get("/api/browse", params={"url": url}).json()
+    assert data["type"] == "video" and data["heights"] == [1080, 720]
+    assert data["default_quality"] == "1080" and data["folder"].endswith("Videos")
+
+    bad = client.post("/api/video", json={"url": url, "start": "0:30", "end": "0:10"})
+    assert bad.status_code == 400
+    assert client.post("/api/video", json={"url": "Daft Punk"}).status_code == 400
+
+    started = client.post("/api/video", json={"url": url, "quality": "720", "end": "0:30"})
+    assert started.status_code == 202
+    job = wait_for(client, started.json()["id"], ("finished",))
+    assert job["kind"] == "video" and job["counts"]["done"] == 1
+    assert job["tasks"][0]["source"] == "720p H.264 + AAC 130 kbps"
+    assert probes == [url]  # browse + download = one lookup (cached)
+    assert clips == [(None, 30.0)]
+
+    # "Download now" on a video link saves its audio into the music library
+    now = client.post("/api/jobs", json={"url": url}).json()
+    done = wait_for(client, now["id"], ("finished",))
+    assert done["counts"]["done"] == 1 and downloaded[-1] == (url, "audio")
+    assert str(services.settings.resolved_output_dir) in (done["tasks"][0]["path"] or "")
+
+
+def test_storage_endpoints(client: TestClient) -> None:
+    items = client.get("/api/storage").json()["items"]
+    assert {"tmp", "logs", "database", "settings", "ytdlp_cache"} <= {i["key"] for i in items}
+    assert client.post("/api/storage/clean", json={"keys": ["music"]}).status_code == 400
+    done = client.post("/api/storage/clean", json={"keys": ["tmp", "logs"]}).json()
+    assert [r["key"] for r in done["results"]] == ["tmp", "logs"]

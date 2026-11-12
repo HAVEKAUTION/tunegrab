@@ -17,23 +17,25 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from tunegrab import __version__
+from tunegrab import __version__, storage
 from tunegrab.config import (
     AudioFormat,
     Settings,
+    VideoQuality,
     coerce_setting,
     config_file,
     log_dir,
     read_config_file,
     write_config_file,
 )
-from tunegrab.doctor import run_all
+from tunegrab.doctor import run_all, update_ytdlp
+from tunegrab.download.ytdlp import DownloadError
 from tunegrab.imports import collection_from_csv
 from tunegrab.library.paths import TemplateError, validate_template
 from tunegrab.matching.base import SearchError
@@ -41,7 +43,25 @@ from tunegrab.metadata.base import MetadataError, NotFoundError
 from tunegrab.models import Candidate, Collection, Job, Match, TaskStatus, Track, TrackTask
 from tunegrab.pipeline import Pipeline
 from tunegrab.services import Services, build_services
-from tunegrab.urls import InvalidURLError, SpotifyRef, is_spotify_input, parse_youtube_id
+from tunegrab.urls import (
+    InvalidURLError,
+    SpotifyRef,
+    is_spotify_input,
+    is_video_link,
+    parse_youtube_id,
+)
+from tunegrab.video import (
+    VideoEntry,
+    VideoError,
+    VideoMode,
+    VideoOptions,
+    VideoPipeline,
+    VideoProbe,
+    build_job,
+    check_clip,
+    parse_time,
+    probe,
+)
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +70,30 @@ MAX_JOBS = 200  # in memory; older finished jobs stay in the archive's job histo
 SYSTEM_CACHE_S = 60.0
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})
 HEARTBEAT_S = 15.0
+
+
+class VideoRequest(BaseModel):
+    """A video link to download as video (MP4) or audio, optionally only a clip."""
+
+    url: str = Field(min_length=1, max_length=4000)
+    mode: VideoMode = "video"
+    quality: VideoQuality | None = None  # default: the video_quality setting
+    start: str | None = None  # "1:23"
+    end: str | None = None
+    format: AudioFormat | None = None  # for mode="audio"
+
+
+class CleanRequest(BaseModel):
+    keys: list[str] = Field(default_factory=lambda: ["tmp", "logs", "database", "ytdlp_cache"])
+
+
+class Runner(Protocol):
+    async def run(self, job: Job) -> Job: ...
+    def cancel(self) -> None: ...
+
+
+PROBE_CACHE_S = 600.0
+PROBE_CACHE_SIZE = 32
 
 
 class JobRequest(BaseModel):
@@ -132,6 +176,8 @@ def task_payload(job: Job, task: TrackTask) -> dict[str, Any]:
         "message": task.message,
         "error": task.error,
         "path": task.path,
+        "source": task.source,
+        "low_quality": task.low_quality,
         "match": (
             {
                 "url": match.candidate.url,
@@ -151,7 +197,10 @@ class JobManager:
     def __init__(self, services: Services) -> None:
         self.services = services
         self.jobs: dict[str, Job] = {}
-        self.pipelines: dict[str, Pipeline] = {}
+        self.pipelines: dict[str, Runner] = {}
+        # video jobs: what's needed to retry them (options, task id -> video)
+        self.video_jobs: dict[str, tuple[VideoOptions, dict[str, VideoEntry]]] = {}
+        self._probes: dict[str, tuple[float, VideoProbe]] = {}
         self.subscribers: set[asyncio.Queue[str]] = set()
         self.loop: asyncio.AbstractEventLoop | None = None
         self._run_lock = asyncio.Lock()
@@ -275,7 +324,60 @@ class JobManager:
         self._publish("job", job_summary(job))
         await self._run(job, pipeline)
 
-    async def _run(self, job: Job, pipeline: Pipeline) -> None:
+    # -- video
+    def probe(self, url: str) -> VideoProbe:
+        """yt-dlp lookup, cached for a few minutes (Browse, then Download, = one lookup)."""
+        key = url.strip()
+        now = time.monotonic()
+        cached = self._probes.get(key)
+        if cached is not None and now - cached[0] < PROBE_CACHE_S:
+            return cached[1]
+        found = probe(key, self.services.settings.cookies_from_browser)
+        self._probes[key] = (now, found)
+        if len(self._probes) > PROBE_CACHE_SIZE:
+            oldest = min(self._probes, key=lambda k: self._probes[k][0])
+            self._probes.pop(oldest, None)
+        return found
+
+    def _video_pipeline(
+        self, options: VideoOptions, entries: dict[str, VideoEntry], fmt: AudioFormat | None
+    ) -> VideoPipeline:
+        return VideoPipeline(self._settings_for(fmt), options, entries, on_event=self._on_event)
+
+    async def submit_video(self, request: VideoRequest) -> Job:
+        self.loop = asyncio.get_running_loop()
+        job = Job(input=request.url.strip())
+        self.jobs[job.id] = job
+        self._publish("job", job_summary(job))
+        self._spawn(self._probe_and_run(job, request))
+        return job
+
+    async def _probe_and_run(self, job: Job, request: VideoRequest) -> None:
+        try:
+            found = await asyncio.to_thread(self.probe, request.url)
+            start, end = parse_time(request.start), parse_time(request.end)
+            if (start is not None or end is not None) and found.kind != "video":
+                raise VideoError("A clip needs a single video, not a playlist.")
+            duration = found.entries[0].duration_s if found.kind == "video" else None
+            start, end = check_clip(start, end, duration)
+        except (VideoError, DownloadError) as exc:
+            job.error = str(exc)
+            job.finished_at = job.created_at
+            self._publish("job", job_summary(job))
+            return
+        options = VideoOptions(
+            mode=request.mode,
+            quality=request.quality or self.services.settings.video_quality,
+            start=start,
+            end=end,
+        )
+        built, entries = build_job(found, options)
+        job.collection, job.tasks = built.collection, built.tasks
+        self.video_jobs[job.id] = (options, entries)
+        self._publish("job", job_summary(job))
+        await self._run(job, self._video_pipeline(options, entries, request.format))
+
+    async def _run(self, job: Job, pipeline: Runner) -> None:
         self.pipelines[job.id] = pipeline
         async with self._run_lock:
             if job.cancelled:
@@ -304,6 +406,11 @@ class JobManager:
         excess = max(0, len(self.jobs) - MAX_JOBS)
         for old in sorted(finished, key=lambda j: j.created_at)[:excess]:
             self.jobs.pop(old.id, None)
+
+    def busy(self) -> bool:
+        return any(
+            job_state(job) in ("resolving", "queued", "running") for job in self.jobs.values()
+        )
 
     def clear_finished(self) -> int:
         done = [jid for jid, j in self.jobs.items() if j.finished_at or j.error]
@@ -340,14 +447,23 @@ class JobManager:
         if not failed:
             raise ValueError("This job has no failed tracks.")
         tasks = [TrackTask(track=t.track, position=t.position) for t in failed]
-        collection = (
-            old.collection.model_copy(update={"source": "retry"}) if old.collection else None
-        )
+        video = self.video_jobs.get(job_id)
+        collection = old.collection
+        if collection is not None and video is None:  # video jobs keep "video:<mode>"
+            collection = collection.model_copy(update={"source": "retry"})
         job = Job(input=old.input, collection=collection, tasks=tasks)
         self.jobs[job.id] = job
         self.loop = asyncio.get_running_loop()
         self._publish("job", job_summary(job))
-        self._spawn(self._run(job, self.services.pipeline(on_event=self._on_event)))
+        runner: Runner
+        if video is not None:
+            options, old_entries = video
+            entries = {new.id: old_entries[o.id] for new, o in zip(tasks, failed, strict=True)}
+            self.video_jobs[job.id] = (options, entries)
+            runner = self._video_pipeline(options, entries, None)
+        else:
+            runner = self.services.pipeline(on_event=self._on_event)
+        self._spawn(self._run(job, runner))
         return job
 
     def cancel(self, job_id: str) -> None:
@@ -369,6 +485,7 @@ UI_SETTINGS = (
     "playlist_mode",
     "track_template",
     "playlist_template",
+    "video_quality",
 )
 
 
@@ -541,6 +658,43 @@ def create_app(
     def clear_finished() -> dict[str, Any]:
         return {"cleared": manager.clear_finished()}
 
+    update_lock = asyncio.Lock()
+
+    @app.get("/api/storage")
+    async def get_storage(uv: bool = False) -> dict[str, Any]:
+        """What TuneGrab keeps on disk besides the music."""
+        items = await asyncio.to_thread(storage.report, services.settings, uv)
+        return {"items": [i.payload() for i in items]}
+
+    @app.post("/api/storage/clean")
+    async def post_clean(body: CleanRequest) -> dict[str, Any]:
+        keys = list(dict.fromkeys(body.keys))
+        known = {"tmp", "logs", "database", "ytdlp_cache", "uv_cache"}
+        if not keys or not set(keys) <= known:
+            raise HTTPException(400, f"Choose from: {', '.join(sorted(known))}")
+        if "tmp" in keys and manager.busy():
+            keys.remove("tmp")  # those folders are in use right now
+        results = await asyncio.to_thread(storage.clean, services.settings, keys)
+        return {
+            "freed": sum(r.freed for r in results),
+            "results": [{"key": r.key, "freed": r.freed, "detail": r.detail} for r in results],
+        }
+
+    @app.post("/api/system/update-ytdlp")
+    async def post_update_ytdlp() -> dict[str, Any]:
+        """Upgrade yt-dlp (YouTube changes often; an old yt-dlp is the usual cause of
+        failures). The new version is used after TuneGrab restarts."""
+        if manager.busy():
+            raise HTTPException(409, "Wait for the downloads to finish, then update.")
+        if update_lock.locked():
+            raise HTTPException(409, "An update is already running.")
+        async with update_lock:
+            ok, output = await asyncio.to_thread(update_ytdlp)
+        system_cache.clear()
+        if not ok:
+            raise HTTPException(500, f"Update failed: {output[-2000:]}")
+        return {"ok": True, "output": output[-2000:]}
+
     @app.post("/api/failures/retry", status_code=202)
     async def retry_failures() -> dict[str, Any]:
         try:
@@ -570,6 +724,18 @@ def create_app(
         data = collection.model_dump(mode="json")
         return data
 
+    @app.post("/api/video", status_code=202)
+    async def create_video_job(request: VideoRequest) -> dict[str, Any]:
+        """Download a video link (YouTube or any yt-dlp site) as MP4, a clip, or audio."""
+        if not is_video_link(request.url):
+            raise HTTPException(400, "That isn't a video link.")
+        try:  # fail fast on bad times; they're checked against the length later
+            start, end = parse_time(request.start), parse_time(request.end)
+            check_clip(start, end, None)
+        except VideoError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return job_summary(await manager.submit_video(request))
+
     @app.post("/api/jobs", status_code=202)
     async def create_job(request: JobRequest) -> dict[str, Any]:
         sources = [
@@ -580,6 +746,10 @@ def create_app(
         ]
         if sum(sources) != 1:
             raise HTTPException(400, "Give one of url, ytm_album, spotify_tracks or csv_text")
+        if request.url and is_video_link(request.url) and not request.track_ids:
+            # "Download now" on a YouTube (etc.) link: the video's audio, as music
+            video = VideoRequest(url=request.url, mode="audio", format=request.format)
+            return job_summary(await manager.submit_video(video))
         job = await manager.submit(request)
         return job_summary(job)
 
@@ -594,6 +764,19 @@ def create_app(
     async def browse(url: str) -> dict[str, Any]:
         """Artist -> its releases; album/playlist/track -> its tracks; plain text -> artist."""
         text = url.strip()
+        if is_video_link(text):
+            try:
+                found = await asyncio.to_thread(manager.probe, text)
+            except VideoError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            except DownloadError as exc:
+                raise HTTPException(502, str(exc)) from exc
+            return {
+                "type": "video",
+                **found.payload(),
+                "default_quality": services.settings.video_quality,
+                "folder": str(services.settings.resolved_video_dir),
+            }
         try:
             if not is_spotify_input(text):
                 if not text:

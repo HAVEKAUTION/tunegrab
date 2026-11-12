@@ -6,11 +6,13 @@ unit-tested by patching ``shutil.which`` / ``subprocess.run``.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from datetime import date
 from enum import StrEnum
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
@@ -20,6 +22,25 @@ from tunegrab.config import Settings
 
 MIN_PYTHON = (3, 11)
 _VERSION_TIMEOUT_S = 10
+# yt-dlp's version is its release date; YouTube changes often enough that a build older
+# than this is the most likely reason downloads break.
+YTDLP_STALE_DAYS = 60
+
+# JS runtimes yt-dlp can use to solve YouTube's challenges, in the order it prefers them,
+# with the oldest version it supports: (executable, label, version args, minimum).
+JS_RUNTIMES: tuple[tuple[str, str, list[str], tuple[int, int, int]], ...] = (
+    ("deno", "Deno", ["--version"], (2, 3, 0)),
+    ("node", "Node.js", ["--version"], (22, 0, 0)),
+    ("bun", "Bun", ["--version"], (1, 2, 11)),
+    ("qjs", "QuickJS", ["--help"], (2023, 12, 9)),
+)
+JS_RUNTIME_HINT = (
+    "yt-dlp needs a JS runtime for YouTube. Install Deno "
+    "(Windows: irm https://deno.land/install.ps1 | iex; macOS/Linux: "
+    "curl -fsSL https://deno.land/install.sh | sh) and restart your terminal. "
+    "Node.js 22+, Bun 1.2.11+ or QuickJS also work."
+)
+_VERSION = re.compile(r"(\d{4})-(\d{2})-(\d{2})|(\d+)\.(\d+)(?:\.(\d+))?")
 
 
 class Status(StrEnum):
@@ -85,23 +106,59 @@ def check_ffmpeg() -> CheckResult:
     )
 
 
+def parse_version(text: str) -> tuple[int, int, int] | None:
+    """First version number in ``text``: ``2.9.8``, ``v24.1.0`` or a ``2024-01-13`` date."""
+    found = _VERSION.search(text)
+    if found is None:
+        return None
+    parts = found.groups()
+    numbers = parts[:3] if parts[0] else parts[3:]
+    return (int(numbers[0]), int(numbers[1]), int(numbers[2] or 0))
+
+
+def check_js_runtime() -> CheckResult:
+    """Any JS runtime yt-dlp supports (Deno preferred), new enough to be used."""
+    label = "JS runtime"
+    too_old: list[str] = []
+    for exe, name, args, minimum in JS_RUNTIMES:
+        if shutil.which(exe) is None:
+            continue
+        result = check_executable(exe, name, args, JS_RUNTIME_HINT)
+        if result.status is not Status.OK:
+            too_old.append(f"{name}: {result.detail}")
+            continue
+        version = parse_version(result.detail)
+        if version is not None and version < minimum:
+            shown = ".".join(str(n) for n in minimum)
+            too_old.append(f"{name} {'.'.join(map(str, version))} (need {shown}+)")
+            continue
+        return CheckResult(label, Status.OK, f"{name}: {result.detail}")
+    detail = "; ".join(too_old) if too_old else "none found on PATH (Deno, Node.js, Bun, QuickJS)"
+    return CheckResult(label, Status.FAIL, detail, JS_RUNTIME_HINT)
+
+
 def check_deno() -> CheckResult:
-    return check_executable(
-        "deno",
-        "Deno",
-        ["--version"],
-        "yt-dlp needs a JS runtime for YouTube. Install Deno "
-        "(Windows: irm https://deno.land/install.ps1 | iex) and restart your terminal.",
-    )
+    """Kept for callers of the old name."""
+    return check_js_runtime()
 
 
-def check_ytdlp() -> CheckResult:
-    """yt-dlp must be installed; report its version (old versions break often)."""
+def check_ytdlp(today: date | None = None) -> CheckResult:
+    """yt-dlp must be installed. Its version is its release date: warn when it's old,
+    since an outdated yt-dlp is the usual reason YouTube downloads start failing."""
     try:
         found = package_version("yt-dlp")
     except PackageNotFoundError:
         return CheckResult("yt-dlp", Status.FAIL, "not installed", "Run: uv sync")
-    return CheckResult("yt-dlp", Status.OK, found, "If YouTube breaks, run: uv add yt-dlp@latest")
+    hint = 'Update it: Settings > System > "Update yt-dlp", or run: tunegrab doctor --update'
+    try:
+        year, month, day = (int(part) for part in found.split(".")[:3])
+        released = date(year, month, day)
+    except ValueError:
+        return CheckResult("yt-dlp", Status.OK, found, hint)
+    age = ((today or date.today()) - released).days
+    if age > YTDLP_STALE_DAYS:
+        return CheckResult("yt-dlp", Status.WARN, f"{found} ({age} days old)", hint)
+    return CheckResult("yt-dlp", Status.OK, found, hint)
 
 
 def check_ejs() -> CheckResult:
@@ -145,7 +202,17 @@ def update_commands() -> list[list[str]]:
                 "--directory",
                 str(root),
             ],
-            [uv, "sync", "--directory", str(root)],
+            # --no-install-project: a running server locks tunegrab.exe on Windows.
+            # --inexact --no-dev: change nothing but the upgraded packages.
+            [
+                uv,
+                "sync",
+                "--no-install-project",
+                "--inexact",
+                "--no-dev",
+                "--directory",
+                str(root),
+            ],
         ]
     if uv:
         return [[uv, "pip", "install", "--python", sys.executable, "--upgrade", "yt-dlp[default]"]]
@@ -216,7 +283,7 @@ def run_all(settings: Settings) -> list[CheckResult]:
     return [
         check_python(),
         check_ffmpeg(),
-        check_deno(),
+        check_js_runtime(),
         check_ytdlp(),
         check_ejs(),
         check_output_dir(settings.output_dir),

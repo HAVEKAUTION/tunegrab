@@ -55,7 +55,7 @@ def test_album_downloads_tagged_files(tmp_path: Path) -> None:
     assert {"matching", "downloading", "converting", "tagging", "done"} <= set(events)
     assert events[0] == "job" and events[-1] == "job"
     assert job.finished_at is not None and not job.cancelled
-    assert not any((tmp_path / "lib" / TMP_DIR_NAME).iterdir())  # temp dirs cleaned
+    assert not (tmp_path / "lib" / TMP_DIR_NAME).exists()  # temp dirs cleaned
 
 
 def test_rerun_skips_everything(tmp_path: Path) -> None:
@@ -81,7 +81,7 @@ def test_other_format_is_not_skipped(tmp_path: Path) -> None:
     pipeline.settings = pipeline.settings.model_copy(update={"format": "m4a"})
 
     class M4ADownloader(FakeDownloader):
-        def download(self, video_id, dest_dir, progress=None, cancel=None):  # type: ignore[no-untyped-def]
+        def download(self, video_id, dest_dir, progress=None, cancel=None, source=None):  # type: ignore[no-untyped-def]
             out = super().download(video_id, dest_dir, progress, cancel)
             return out.rename(out.with_suffix(".m4a"))
 
@@ -209,3 +209,53 @@ def test_search_query_job(tmp_path: Path) -> None:
     pipeline.query_lookup = lambda q: None
     with pytest.raises(LookupError):
         pipeline.build_job("nothing")
+
+
+def test_unavailable_video_falls_back_to_next_match(tmp_path: Path) -> None:
+    track = make_track(1)
+    first = candidate_for(track, video_id="aaaaaaaaaaa")
+    second = candidate_for(track, video_id="bbbbbbbbbbb", source="ytmusic_video")
+    audio = FakeAudio(results={track.title: [first, second]})
+    downloader = FakeDownloader(unavailable={"aaaaaaaaaaa"})
+    pipeline, _ = make_pipeline(
+        tmp_path, tracks=[track], audio=audio, downloader=downloader, retries=0
+    )
+    task = run(pipeline, ALBUM).tasks[0]
+    assert task.status == TaskStatus.DONE
+    assert downloader.downloaded == ["bbbbbbbbbbb"]
+    assert task.match is not None and task.match.candidate is not None
+    assert task.match.candidate.video_id == "bbbbbbbbbbb"
+    assert task.source == "Opus 129 kbps" and not task.low_quality
+
+
+def test_unavailable_with_no_alternative_fails_without_retrying(tmp_path: Path) -> None:
+    track = make_track(1)
+    only = candidate_for(track, video_id="aaaaaaaaaaa")
+    audio = FakeAudio(results={track.title: [only]})
+    downloader = FakeDownloader(unavailable={"aaaaaaaaaaa"})
+    pipeline, _ = make_pipeline(
+        tmp_path, tracks=[track], audio=audio, downloader=downloader, retries=3
+    )
+    task = run(pipeline, ALBUM).tasks[0]
+    assert task.status == TaskStatus.FAILED and task.attempts == 1
+    assert "Video unavailable" in (task.error or "")
+
+
+def test_rate_limit_pauses_then_retries(tmp_path: Path) -> None:
+    downloader = FakeDownloader(rate_limited_times=1)
+    pipeline, _ = make_pipeline(tmp_path, tracks=[make_track(1)], downloader=downloader, retries=2)
+    task = run(pipeline, ALBUM).tasks[0]
+    assert task.status == TaskStatus.DONE and task.attempts == 2
+    assert pipeline._cooldown_strikes == 0  # reset by the successful download
+
+
+def test_rate_limit_cooldown_grows_and_is_capped(tmp_path: Path) -> None:
+    pipeline, _ = make_pipeline(tmp_path, tracks=[make_track(1)])
+    pipeline.rate_limit_pause = 60.0
+    assert [pipeline._rate_limited() for _ in range(5)] == [60.0, 120.0, 240.0, 300.0, 300.0]
+
+
+def test_empty_tmp_folder_is_removed(tmp_path: Path) -> None:
+    pipeline, _ = make_pipeline(tmp_path, tracks=[make_track(1)])
+    run(pipeline, ALBUM)
+    assert not (tmp_path / "lib" / TMP_DIR_NAME).exists()

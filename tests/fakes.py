@@ -214,8 +214,13 @@ class FakeDownloader:
         fail_times: int = 0,
         block: threading.Event | None = None,
         started: threading.Event | None = None,
+        unavailable: set[str] | None = None,
+        rate_limited_times: int = 0,
     ) -> None:
         self.fail_times = fail_times
+        self.unavailable = unavailable or set()  # video IDs that are "Video unavailable"
+        self.rate_limited_times = rate_limited_times
+        self.downloaded: list[str] = []
         self.calls = 0
         self.block = block
         self.started = started
@@ -227,12 +232,18 @@ class FakeDownloader:
         dest_dir: Path,
         progress: Any = None,
         cancel: threading.Event | None = None,
+        source: Any = None,
     ) -> Path:
-        from tunegrab.download.ytdlp import DownloadCancelled, DownloadError
+        from tunegrab.download.ytdlp import DownloadCancelled, DownloadError, SourceInfo
 
         with self.lock:
             self.calls += 1
             should_fail = self.calls <= self.fail_times
+            rate_limited = self.calls <= self.rate_limited_times
+        if video_id in self.unavailable:
+            raise DownloadError("Video unavailable", kind="unavailable")
+        if rate_limited:
+            raise DownloadError("HTTP Error 429: Too Many Requests", kind="rate_limited")
         out = dest_dir / f"{video_id}.mp3"
         out.write_bytes(b"partial")
         if self.started is not None:
@@ -247,6 +258,10 @@ class FakeDownloader:
             progress(0.5, "downloading")
             progress(1.0, "converting")
         out.write_bytes(b"audio")
+        if source is not None:
+            source(SourceInfo(format_id="251", codec="opus", bitrate_kbps=129))
+        with self.lock:
+            self.downloaded.append(video_id)
         return out
 
 
@@ -280,6 +295,7 @@ def make_pipeline(
         archive=archive,
         cover_fetcher=lambda url: b"\xff\xd8\xffcover",
         retry_backoff=0.0,
+        rate_limit_pause=0.0,
     )
     return pipeline, archive
 

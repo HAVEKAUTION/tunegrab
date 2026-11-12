@@ -28,6 +28,7 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("TUNEGRAB_CONFIG_DIR", str(tmp_path / "_config"))
     monkeypatch.setenv("TUNEGRAB_DATA_DIR", str(tmp_path / "_data"))
     monkeypatch.setenv("TUNEGRAB_LOG_DIR", str(tmp_path / "_logs"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "_cache"))  # storage tests: yt-dlp cache
     for key in list(os.environ):
         if key.startswith("SPOTIFY_") or (key.startswith("TUNEGRAB_") and key not in _KEEP):
             monkeypatch.delenv(key, raising=False)

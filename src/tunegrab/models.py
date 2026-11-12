@@ -9,7 +9,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-CollectionKind = Literal["track", "album", "playlist", "artist", "liked", "search", "selection"]
+CollectionKind = Literal[
+    "track", "album", "playlist", "artist", "liked", "search", "selection", "video"
+]
 CandidateSource = Literal["ytmusic_song", "ytmusic_video", "youtube", "manual"]
 
 
@@ -145,6 +147,8 @@ class TrackTask(BaseModel):
     attempts: int = 0
     progress: float = 0.0  # 0..1 during download
     message: str = ""
+    source: str | None = None  # what YouTube served, e.g. "Opus 129 kbps"
+    low_quality: bool = False  # only a low-quality source was available
 
 
 class Job(BaseModel):
