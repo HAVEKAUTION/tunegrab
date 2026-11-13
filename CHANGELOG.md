@@ -2,7 +2,9 @@
 
 All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
 
-## Unreleased
+## 0.6.0 — 2026-11-13
+
+No 0.5.0 was published; its changes are part of this release.
 
 ### Added
 - **Light theme.** The app follows your system's light or dark setting. Both themes are
