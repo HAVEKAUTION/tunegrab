@@ -11,7 +11,7 @@
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776ab)
 ![Platforms](https://img.shields.io/badge/runs%20on-Windows%20%7C%20macOS%20%7C%20Linux-555)
 ![Local only](https://img.shields.io/badge/runs-100%25%20local-0ea5e9)
-![Tests](https://img.shields.io/badge/tests-394%20passing-22c55e)
+[![CI](https://github.com/HAVEKAUTION/tunegrab/actions/workflows/ci.yml/badge.svg)](https://github.com/HAVEKAUTION/tunegrab/actions/workflows/ci.yml)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 
 [Features](#-features) · [Videos](#-videos-and-clips) · [Install](#-install) · [Using the app](#%EF%B8%8F-using-the-app) · [Command line](#-command-line) · [Settings](#%EF%B8%8F-settings) · [FAQ](#-faq) · [Troubleshooting](#-troubleshooting)
@@ -166,6 +166,8 @@ just a clip of it, or only its audio.
 - Runs only on your PC and listens only on `127.0.0.1`. Other websites can't talk to it.
 - No accounts, tracking, ads or crash reporting.
 - Optional Spotify credentials are kept in a git-ignored `.env` file or your system keyring.
+  TuneGrab reads `.env` only from its settings folder and its install folder, never from the
+  folder you happen to run it in.
 - Never decrypts Spotify audio.
 
 </details>
@@ -483,7 +485,8 @@ Global flags: `--version`, `-v/--verbose` (logs always go to a rotating file too
 <br>
 
 From highest to lowest priority: **command-line flags → `TUNEGRAB_*` environment variables →
-`.env` → system keyring → config file → defaults.** Run `tunegrab config show` to see every
+`.env` (in the settings folder or the install folder) → system keyring → config file →
+defaults.** Run `tunegrab config show` to see every
 setting and where its value came from.
 
 | Setting | Default | Meaning |
@@ -621,6 +624,14 @@ and PyPI for the newest TuneGrab and yt-dlp version numbers (turn it off in
 **Settings → Updates**, or `tunegrab config set check_updates false`); nothing about you or
 your music is sent. There's no tracking or crash reporting. Logs stay on your PC
 (**Settings → About** shows where).
+
+**Who can use the app on my PC?** The app has no password. Websites can't reach it, but any
+program running on your computer (and any other user signed in to it) can talk to
+`127.0.0.1:8765` and start downloads, change settings or open a folder. That's normal for a
+personal tool on your own computer; don't run it with `--host 0.0.0.0` on a shared network.
+
+**Is the installer safe?** From 0.6.0 each release carries a `SHA256SUMS` file, and the
+installer refuses a download whose checksum doesn't match.
 
 </details>
 

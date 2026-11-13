@@ -36,7 +36,16 @@ All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
   ("MP3 · from Opus 129 kbps") and is marked "Low quality source" when YouTube only had a poor
   version. Songs downloaded before this version show their format only.
 
+### Security
+- `.env` is read only from TuneGrab's settings folder and install folder, no longer from
+  whatever folder `tunegrab` was started in (another project's `.env` could change settings).
+- Releases come with `SHA256SUMS`; the installer checks the zip against it (from 0.6.0).
+- README says plainly that the local app has no password and who can reach it.
+
 ### Fixed
+- `tunegrab clean` skips temporary download folders used in the last 30 minutes, so it can't
+  pull files from under a download running in the app.
+- The settings file says that TuneGrab rewrites it (comments added by hand are lost).
 - **Big libraries stay quick.** Library shows 400 songs at a time (whole artists) with
   "Show 400 more songs"; filtering 10,000 songs went from up to 1.5 s per keystroke to under
   60 ms. Picked songs and CSV rows that only have a Spotify ID are looked up six at a time,

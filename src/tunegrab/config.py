@@ -140,12 +140,19 @@ class _KeyringSource(PydanticBaseSettingsSource):
 COOKIE_BROWSERS = ("firefox", "chrome", "edge", "brave", "safari", "opera", "vivaldi")
 
 
+INSTALL_DIR = (
+    Path(__file__).resolve().parents[2]
+)  # the folder install.ps1 / a clone puts TuneGrab in
+ENV_FILES = (config_dir() / ".env", INSTALL_DIR / ".env")
+
+
 class Settings(BaseSettings):
     """Application settings."""
 
     model_config = SettingsConfigDict(
         env_prefix="TUNEGRAB_",
-        env_file=(config_dir() / ".env", ".env"),
+        # only TuneGrab's own .env files, never one in whatever folder it was started from
+        env_file=ENV_FILES,
         env_file_encoding="utf-8",
         extra="ignore",
         populate_by_name=True,
@@ -379,7 +386,10 @@ def _toml_value(value: Any) -> str:
 def write_config_file(values: dict[str, Any], path: Path | None = None) -> Path:
     path = path or config_file()
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = ["# TuneGrab settings. Edit by hand or with `tunegrab config set KEY VALUE`."]
+    lines = [
+        "# TuneGrab settings. Edit by hand or with `tunegrab config set KEY VALUE`.",
+        "# TuneGrab rewrites this file when settings are saved, so comments added here are lost.",
+    ]
     lines += [f"{key} = {_toml_value(values[key])}" for key in sorted(values)]
     tmp = path.with_suffix(".tmp")
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")

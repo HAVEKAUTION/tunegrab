@@ -206,3 +206,12 @@ def test_a_chosen_format_is_never_changed() -> None:
     write_config_file({"format": "opus"})
     assert keep_earlier_defaults(Settings(_env_file=None)).format == "opus"
     assert read_config_file() == {"format": "opus"} and _marker().exists()
+
+
+def test_dotenv_comes_only_from_tunegrab_folders() -> None:
+    from tunegrab import config
+
+    files = config.ENV_FILES
+    assert Path(".env") not in files and ".env" not in files  # not the current folder
+    assert files[-1] == config.INSTALL_DIR / ".env"
+    assert (config.INSTALL_DIR / "pyproject.toml").exists()  # really the install folder

@@ -13,6 +13,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -68,6 +69,30 @@ def human_size(size: int) -> str:
             return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
         value /= 1024
     return f"{value:.1f} GB"
+
+
+IN_USE_S = 30 * 60  # a temp folder touched this recently may belong to a running download
+
+
+def _last_change(path: Path) -> float:
+    try:
+        return max([path.stat().st_mtime] + [p.stat().st_mtime for p in path.rglob("*")])
+    except OSError:  # vanished while looking: treat as in use
+        return time.time()
+
+
+def stale_tmp(settings: Settings, now: float | None = None) -> list[Path]:
+    """Leftover download folders nobody has written to for half an hour. `tunegrab clean`
+    can run while the app downloads; younger folders are skipped so it never pulls files
+    out from under a running job."""
+    now = time.time() if now is None else now
+    return [
+        child
+        for root in tmp_dirs(settings)
+        if root.exists()
+        for child in root.iterdir()
+        if now - _last_change(child) > IN_USE_S
+    ]
 
 
 def tmp_dirs(settings: Settings) -> list[Path]:
@@ -205,7 +230,7 @@ def clean(
     results: list[CleanResult] = []
     for key in keys:
         if key == "tmp":
-            freed = _remove(p for p in tmp_dirs(settings) if p.exists())
+            freed = _remove(stale_tmp(settings))
             results.append(CleanResult(key, freed, "removed unfinished downloads"))
         elif key == "logs":
             results.append(CleanResult(key, _remove(log_backups()), "removed old log files"))
