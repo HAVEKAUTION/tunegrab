@@ -7,6 +7,8 @@ import itertools
 import json
 import logging
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
@@ -18,7 +20,7 @@ from tunegrab.config import (
     VideoQuality,
 )
 from tunegrab.download.ytdlp import DownloadError
-from tunegrab.imports import collection_from_csv
+from tunegrab.imports import collection_from_csv, read_rows
 from tunegrab.library.archive import DownloadRecord, VideoRecord
 from tunegrab.matching.base import SearchError
 from tunegrab.metadata.base import MetadataError
@@ -58,6 +60,26 @@ log = logging.getLogger(__name__)
 
 PROGRESS_EVENT_INTERVAL_S = 0.3
 MAX_JOBS = 200  # in memory; older finished jobs stay in the archive's job history
+LOOKUP_WORKERS = 6  # Spotify track lookups at once when a selection or CSV names songs by ID
+
+
+def lookup_all(ids: list[str], lookup: Callable[[str], Track]) -> dict[str, Track]:
+    """Look up several Spotify track IDs at once; IDs that fail are left out."""
+
+    def one(track_id: str) -> tuple[str, Track | None]:
+        try:
+            return track_id, lookup(track_id)
+        except (MetadataError, LookupError, IndexError) as exc:
+            log.info("could not look up %s: %s", track_id, exc)
+            return track_id, None
+
+    unique = list(dict.fromkeys(ids))
+    if len(unique) <= 1:
+        found = [one(i) for i in unique]
+    else:
+        with ThreadPoolExecutor(min(LOOKUP_WORKERS, len(unique))) as pool:
+            found = list(pool.map(one, unique))
+    return {i: t for i, t in found if t is not None}
 
 
 class VideoRequest(BaseModel):
@@ -272,10 +294,9 @@ class JobManager:
             return
         self._last_sent[task.id] = (task.status.value, now)
         task_data = task_payload(job, task)
-        summary = job_summary(job)
         self.loop.call_soon_threadsafe(self._publish, "task", task_data)
-        if task.status.finished:
-            self.loop.call_soon_threadsafe(self._publish, "job", summary)
+        if task.status.finished:  # counts change only when a song ends
+            self.loop.call_soon_threadsafe(self._publish, "job", job_summary(job))
         if task.replaces is not None and task.status == TaskStatus.DONE:
             # the song has the video the user chose: earlier rows stop asking about it
             self.loop.call_soon_threadsafe(self._reviewed, task.track.key)
@@ -345,24 +366,26 @@ class JobManager:
             )
             return Job(input=request.label, collection=collection, tasks=tasks)
         if request.csv_text:
+            ids = [e for e in read_rows(request.csv_text) if isinstance(e, str)]
+            found = lookup_all(ids, self._track)
             collection = collection_from_csv(
                 request.csv_text,
                 (request.name or "Imported songs").strip() or "Imported songs",
-                lookup=lambda tid: self.services.resolver.resolve_ref(
-                    SpotifyRef("track", tid)
-                ).tracks[0],
+                lookup=lambda tid: found[tid],  # KeyError -> counted as skipped
             )
             tasks = [
                 TrackTask(track=t, position=i) for i, t in enumerate(collection.tracks, start=1)
             ]
             return Job(input=request.label, collection=collection, tasks=tasks)
         if request.spotify_tracks:
-            tracks = [
-                self.services.resolver.resolve_ref(SpotifyRef("track", tid)).tracks[0]
-                for tid in dict.fromkeys(request.spotify_tracks)
-            ]
+            found = lookup_all(request.spotify_tracks, self._track)
+            tracks = [found[tid] for tid in dict.fromkeys(request.spotify_tracks) if tid in found]
+            missed = len(dict.fromkeys(request.spotify_tracks)) - len(tracks)
             collection = Collection(
-                kind="selection", name=request.name or "Selected tracks", tracks=tracks
+                kind="selection",
+                name=request.name or "Selected tracks",
+                tracks=tracks,
+                warnings=[f"{missed} of the selected songs couldn't be found."] if missed else [],
             )
             tasks = [TrackTask(track=t, position=i) for i, t in enumerate(tracks, start=1)]
             return Job(input=request.label, collection=collection, tasks=tasks)
@@ -373,6 +396,17 @@ class JobManager:
             if job.collection.kind == "artist":
                 job.collection.kind = "selection"
         return job
+
+    def _track(self, track_id: str) -> Track:
+        return self.services.resolver.resolve_ref(SpotifyRef("track", track_id)).tracks[0]
+
+    def _forget(self, job_id: str) -> None:
+        """Drop a job and everything kept for it in memory."""
+        job = self.jobs.pop(job_id, None)
+        self.pipelines.pop(job_id, None)
+        self.video_jobs.pop(job_id, None)
+        for task in job.tasks if job else []:
+            self._last_sent.pop(task.id, None)
 
     def _settings_for(self, fmt: str | None) -> Settings:
         if fmt is None:
@@ -495,7 +529,7 @@ class JobManager:
         finished = [j for j in self.jobs.values() if j.finished_at or j.error]
         excess = max(0, len(self.jobs) - MAX_JOBS)
         for old in sorted(finished, key=lambda j: j.created_at)[:excess]:
-            self.jobs.pop(old.id, None)
+            self._forget(old.id)
 
     def busy(self) -> bool:
         return any(
@@ -505,7 +539,7 @@ class JobManager:
     def clear_finished(self) -> int:
         done = [jid for jid, j in self.jobs.items() if j.finished_at or j.error]
         for jid in done:
-            self.jobs.pop(jid, None)
+            self._forget(jid)
         return len(done) + self.services.archive.clear_job_history()
 
     async def retry_failures(self) -> Job:

@@ -987,7 +987,10 @@ async function loadLibrary() {
 }
 $("#lib-refresh").addEventListener("click", async (e) => { const b = e.currentTarget; b.disabled = true; await loadLibrary(); b.disabled = false; });
 let filterTimer = 0;
-$("#lib-filter").addEventListener("input", () => { clearTimeout(filterTimer); filterTimer = setTimeout(renderLibrary, 120); });
+// Big libraries render in pages of whole artists: drawing 10,000 rows on every keystroke took over a second.
+const LIB_PAGE = 400;
+let libLimit = LIB_PAGE;
+$("#lib-filter").addEventListener("input", () => { clearTimeout(filterTimer); filterTimer = setTimeout(() => { libLimit = LIB_PAGE; renderLibrary(); }, 120); });
 
 function renderLibrary() {
   const lib = state.library;
@@ -1021,7 +1024,10 @@ function renderLibrary() {
     albums.get(album).push(t);
   }
   const artists = [...byArtist.keys()].sort((a, b) => a.localeCompare(b));
-  $("#library").innerHTML = artists.map((artist) => {
+  let shown = 0, cut = 0;
+  for (const a of artists) { if (shown >= libLimit) break; for (const list of byArtist.get(a).values()) shown += list.length; cut++; }
+  const more = tracks.length - shown;
+  $("#library").innerHTML = artists.slice(0, cut).map((artist) => {
     const albums = byArtist.get(artist);
     return `<section class="lib-artist"><h3>${esc(artist)}</h3>${[...albums.keys()].sort().map((album) => {
       const list = albums.get(album).sort((a, b) => (a.track_number || 0) - (b.track_number || 0));
@@ -1033,7 +1039,8 @@ function renderLibrary() {
         <td class="c-end">${t.exists ? `<button class="btn ghost sm" data-show="${esc(t.path)}" aria-label="Show ${esc(t.title)} in folder">${icon("folder")}Show</button>` : ""}</td></tr>`).join("")}
         </tbody></table></div></div>`;
     }).join("")}</section>`;
-  }).join("");
+  }).join("") + (more > 0 ? `<div class="row section"><button class="btn" data-lib-more>${icon("chevron")}Show ${plural(Math.min(more, LIB_PAGE), "more song")}</button>
+    <span class="small muted">${plural(more, "song")} not shown yet. Type in the filter to find one directly.</span></div>` : "");
 }
 // ============================================================== playlist sync
 // Library -> a playlist -> "Check for new songs": downloads what was added and lists
@@ -1170,6 +1177,7 @@ $("#tab-library").addEventListener("click", (e) => {
     return;
   }
   if (b.dataset.removed) { showRemoved(b.dataset.removed); return; }
+  if (b.hasAttribute("data-lib-more")) { libLimit += LIB_PAGE; renderLibrary(); return; }
   if (b.dataset.show) openPath(b.dataset.show);
   if (b.hasAttribute("data-goto-get")) { showTab("get"); $("#url").focus(); }
 });

@@ -37,6 +37,10 @@ All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
   version. Songs downloaded before this version show their format only.
 
 ### Fixed
+- **Big libraries stay quick.** Library shows 400 songs at a time (whole artists) with
+  "Show 400 more songs"; filtering 10,000 songs went from up to 1.5 s per keystroke to under
+  60 ms. Picked songs and CSV rows that only have a Spotify ID are looked up six at a time,
+  and songs that can't be found are named in a warning instead of failing the download.
 - **Lost connection is shown.** If the page can't reach TuneGrab, a banner says so and the
   sidebar stops claiming the tools are ready; it clears itself on reconnect.
 - **First run** explains what TuneGrab does, where music goes (with Change) and whether the

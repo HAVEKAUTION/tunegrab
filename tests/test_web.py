@@ -1017,3 +1017,53 @@ def test_page_follows_the_cut_list(client: TestClient) -> None:
     assert "uv_cache" not in script and "st-uv" not in script
     # no inline styles: spacing and colour come from app.css
     assert 'style="' not in page
+
+
+def test_progress_events_skip_the_job_summary(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = 0
+    original = web_jobs.job_summary
+
+    def counting(job: Any) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        return original(job)
+
+    monkeypatch.setattr(web_jobs, "job_summary", counting)
+    job = download_album(client)
+    # a few per song (it finishing) plus a handful per job, not one per progress event
+    assert calls <= 4 * len(job["tasks"]) + 10
+
+
+def test_selected_songs_are_looked_up_in_parallel(
+    client: TestClient, services: FakeServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tracks = [make_track(i) for i in range(1, 13)]
+    services.metadata.tracks = tracks
+    original = services.metadata.get_track
+
+    def slow(track_id: str) -> Track:
+        time.sleep(0.2)
+        return original(track_id)
+
+    monkeypatch.setattr(services.metadata, "get_track", slow)
+    ids = [t.spotify_id for t in tracks] + ["0000000000000000000000"]  # one that doesn't exist
+    started = time.monotonic()
+    job = wait_for(
+        client,
+        client.post("/api/jobs", json={"spotify_tracks": ids, "name": "Picks"}).json()["id"],
+        ("finished",),
+    )
+    assert time.monotonic() - started < 1.5  # 12 x 0.2 s one by one would be 2.4 s
+    assert [t["title"] for t in job["tasks"]] == [t.title for t in tracks]  # order kept
+    assert job["warnings"] == ["1 of the selected songs couldn't be found."]
+
+
+def test_finished_jobs_leave_nothing_behind(client: TestClient) -> None:
+    manager = client.app.state.manager  # type: ignore[attr-defined]
+    for _ in range(3):
+        download_album(client)
+    assert manager._last_sent
+    client.delete("/api/jobs/finished")
+    assert not manager.jobs and not manager._last_sent and not manager.pipelines
