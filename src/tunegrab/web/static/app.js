@@ -812,7 +812,7 @@ function renderTask(t) {
     ? `<button class="btn sm ghost" data-show="${esc(t.path)}" aria-label="Show ${esc(t.title)} in folder">${icon("folder")}Show</button>` : "";
   const detail = t.status === "failed" ? `<div class="small error-text">${esc(t.error)}</div>${fixBtn}`
     : t.status === "skipped" && t.message ? `<div class="xs faint">${esc(t.message)}</div>`
-    : t.status === "done" && t.source ? `<div class="xs ${t.low_quality ? "warn-text" : "faint"}" title="What YouTube served, before conversion">${t.low_quality ? icon("alert") : ""}Source: ${esc(t.source)}</div>`
+    : t.status === "done" ? `${t.source ? `<div class="xs ${t.low_quality ? "warn-text" : "faint"}" title="What YouTube served, before conversion">${t.low_quality ? icon("alert") : ""}Source: ${esc(t.source)}</div>` : ""}${reviewHtml(t)}`
     : busy && t.message ? `<div class="xs faint">${esc(t.message)}</div>` : "";
   const match = t.match ? `<a class="xs" href="${esc(t.match.url)}" target="_blank" rel="noopener" title="${esc(t.match.reason)}">YouTube ${icon("external")} <span class="tnum">match ${t.match.score}</span></a>` : "";
   return `<tr data-task="${esc(t.id)}"><td class="c-num tnum">${t.position}</td>
@@ -821,6 +821,77 @@ function renderTask(t) {
     <td class="c-end">${match}${showBtn}</td><td class="c-time tnum">${fmtTime(t.duration_s)}</td>
     <td class="c-end"><span class="pill ${kind}">${icon(ic, busy ? "spin" : "")}${label}</span></td></tr>`;
 }
+// ============================================================== match review
+// "Check this match": a song TuneGrab wasn't sure about lists the other videos it found.
+// The same panel serves a Downloads row and a Library row; both carry { key, review }.
+const openReviews = new Set(); // song keys whose panel is open
+const busyReviews = new Set(); // song keys with a choice on its way to the server
+function reviewHtml(item) {
+  const r = item.review;
+  if (!r) return "";
+  const key = esc(item.key), open = openReviews.has(item.key), busy = busyReviews.has(item.key);
+  const toggle = `<div><button class="btn sm review-btn" data-review="${key}" aria-expanded="${open}">${icon("alert")}Check this match${icon("chevron")}</button></div>`;
+  if (!open) return toggle;
+  const line = (m, saved) => `<li><div class="grow"><div class="t-title">${esc(m.title)}</div>
+      <div class="xs faint">${esc(m.channel || "Unknown channel")} · <span class="tnum">${m.duration_s ? fmtTime(m.duration_s) : "length unknown"}</span> · <span class="tnum">match ${m.score}</span> · ${esc(m.reason)}</div></div>
+    <a class="btn sm ghost" href="${esc(m.url)}" target="_blank" rel="noopener" aria-label="Listen to ${esc(m.title)} on YouTube">${icon("external")}Listen</a>
+    ${saved ? `<span class="pill">Saved now</span>` : `<button class="btn sm" data-choose="${esc(m.video_id)}" data-key="${key}" ${busy ? "disabled" : ""}>${busy ? icon("loader", "spin") : ""}Use this one</button>`}</li>`;
+  const others = r.alternatives || [];
+  return `${toggle}<div class="review" role="group" aria-label="Check the match for ${esc(item.title)}">
+    <p class="small"><span class="warn-text">${esc(r.note)}</span>${item.duration_s ? ` <span class="faint">The song is <span class="tnum">${fmtTime(item.duration_s)}</span> long.</span>` : ""}</p>
+    <ul>${r.match ? line(r.match, true) : ""}${others.map((m) => line(m, false)).join("")}</ul>
+    ${others.length ? "" : `<p class="small faint">TuneGrab didn't find another video for this song.</p>`}
+    <div class="row"><button class="btn sm" data-keep="${key}" ${busy ? "disabled" : ""}>${icon("check")}Keep the saved one</button>
+      ${others.length ? `<span class="xs faint">Using another downloads it, then replaces the file once it's ready.</span>` : ""}</div></div>`;
+}
+// Redraw every row of this song (it can be on Downloads and in Library at once).
+function refreshReview(key, { focus = false } = {}) {
+  for (const t of state.tasks.values()) if (t.key === key) dirtyTasks.add(t.id);
+  renderJobs();
+  if (!$("#tab-library").classList.contains("hidden")) renderLibrary();
+  if (focus) $$("[data-review]").find((el) => el.dataset.review === key && el.offsetParent)?.focus();
+}
+function toggleReview(key) {
+  if (!openReviews.delete(key)) openReviews.add(key);
+  refreshReview(key, { focus: true });
+}
+function forgetReview(key) {
+  openReviews.delete(key);
+  for (const t of state.tasks.values()) if (t.key === key) t.review = null;
+  for (const t of state.library?.tracks || []) if (t.key === key) t.review = null;
+}
+async function chooseMatch(key, videoId) {
+  if (busyReviews.has(key)) return;
+  busyReviews.add(key); refreshReview(key);
+  try {
+    const job = await api("/api/review/choose", { method: "POST", body: JSON.stringify({ key, video_id: videoId }) });
+    openReviews.delete(key);
+    upsertJob(job);
+    const elsewhere = $("#tab-jobs").classList.contains("hidden");
+    toast("Downloading that version. Your current file stays until the new one is ready.",
+      { action: elsewhere ? { label: "View", run: () => showTab("jobs") } : null });
+  } catch (err) { toast(err.message, { kind: "bad" }); }
+  finally { busyReviews.delete(key); refreshReview(key, { focus: true }); }
+}
+async function keepMatch(key) {
+  if (busyReviews.has(key)) return;
+  busyReviews.add(key); refreshReview(key);
+  try {
+    await api("/api/review/keep", { method: "POST", body: JSON.stringify({ key }) });
+    forgetReview(key);
+    toast("Kept. TuneGrab won't ask about this song again.");
+  } catch (err) { toast(err.message, { kind: "bad" }); }
+  finally { busyReviews.delete(key); refreshReview(key); }
+}
+// Clicks on the panel, from either tab. True when the click was one of ours.
+function onReviewClick(b) {
+  if (b.dataset.review) toggleReview(b.dataset.review);
+  else if (b.dataset.choose) chooseMatch(b.dataset.key, b.dataset.choose);
+  else if (b.dataset.keep) keepMatch(b.dataset.keep);
+  else return false;
+  return true;
+}
+
 // "Use a YouTube link" for a song TuneGrab couldn't find (or found wrongly and failed).
 let fixTarget = null;
 function openFix(jobId, taskId) {
@@ -870,6 +941,7 @@ $("#tab-jobs").addEventListener("click", async (e) => {
   if (b.hasAttribute("data-goto-get")) { showTab("get"); $("#url").focus(); return; }
   if (b.dataset.fix) { openFix(b.dataset.fix, b.dataset.task); return; }
   if (b.dataset.show) { openPath(b.dataset.show); return; }
+  if (onReviewClick(b)) return;
   if (b.dataset.retry) {
     b.disabled = true;
     try { upsertJob(await api(`/api/jobs/${b.dataset.retry}/retry`, { method: "POST" })); toast("Retrying the failed songs."); }
@@ -946,7 +1018,7 @@ function renderLibrary() {
       const cover = (list.find((t) => t.cover_url) || {}).cover_url;
       return `<div class="lib-album"><div class="cover">${cover ? `<img src="${esc(cover)}" alt="" loading="lazy">` : icon("music")}</div><div><h4>${esc(album)}</h4><table><tbody>${list.map((t) => `<tr>
         <td class="c-num tnum">${t.track_number || ""}</td>
-        <td><span class="t-title">${esc(t.title)}</span>${t.exists ? "" : ` <span class="pill warn">Missing file</span>`}<div class="t-sub">${esc(t.artists.join(", "))}</div></td>
+        <td><span class="t-title">${esc(t.title)}</span>${t.exists ? "" : ` <span class="pill warn">Missing file</span>`}<div class="t-sub">${esc(t.artists.join(", "))}</div>${reviewHtml(t)}</td>
         <td class="xs faint">${esc((t.format || "").toUpperCase())}</td><td class="c-time tnum">${fmtTime(t.duration_s)}</td>
         <td class="c-end">${t.exists ? `<button class="btn ghost sm" data-show="${esc(t.path)}" aria-label="Show ${esc(t.title)} in folder">${icon("folder")}Show</button>` : ""}</td></tr>`).join("")}
         </tbody></table></div></div>`;
@@ -960,6 +1032,7 @@ async function openPath(path) {
 $("#tab-library").addEventListener("click", (e) => {
   const b = e.target.closest("button");
   if (!b) return;
+  if (onReviewClick(b)) return;
   if (b.dataset.show) openPath(b.dataset.show);
   if (b.hasAttribute("data-goto-get")) { showTab("get"); $("#url").focus(); }
 });
@@ -1070,6 +1143,7 @@ function connect() {
       const c = job.counts || {};
       toast(`${job.name}: ${c.done || 0} downloaded${c.failed ? `, ${c.failed} failed` : ""}.`, { kind: c.failed ? "warn" : "ok" });
       state.library = null; loadSystem();
+      if (!$("#tab-library").classList.contains("hidden")) loadLibrary();
     }
   });
   source.addEventListener("task", (e) => {

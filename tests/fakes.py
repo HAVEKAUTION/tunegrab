@@ -85,6 +85,26 @@ class FakeMetadata:
         )
 
 
+LIVE_VIDEO, STUDIO_VIDEO, COVER_VIDEO = "live0000001", "studio00002", "cover000003"
+
+
+def doubtful_candidates(track: Track) -> list[Candidate]:
+    """Search results where a live version wins narrowly (score 70: "check this match"),
+    ahead of a long studio upload and a cover by someone else."""
+    return [
+        candidate_for(track, video_id=LIVE_VIDEO, title=f"{track.title} (Live)", source="youtube"),
+        candidate_for(
+            track,
+            video_id=STUDIO_VIDEO,
+            artists=[f"{track.primary_artist} VEVO"],
+            duration_s=230,
+            source="youtube",
+        ),
+        candidate_for(track, video_id=COVER_VIDEO, artists=["Somebody Else"], source="youtube"),
+        candidate_for(track, video_id=STUDIO_VIDEO, duration_s=230, source="ytmusic_video"),
+    ]
+
+
 def candidate_for(track: Track, **extra: Any) -> Candidate:
     data: dict[str, Any] = {
         "video_id": (track.spotify_id or "x" * 11)[-11:],
@@ -280,6 +300,7 @@ class FakeDownloader:
         self.unavailable = unavailable or set()  # video IDs that are "Video unavailable"
         self.rate_limited_times = rate_limited_times
         self.downloaded: list[str] = []
+        self.content: dict[str, bytes] = {}  # video ID -> the bytes of its file
         self.calls = 0
         self.block = block
         self.started = started
@@ -316,7 +337,7 @@ class FakeDownloader:
         if progress:
             progress(0.5, "downloading")
             progress(1.0, "converting")
-        out.write_bytes(b"audio")
+        out.write_bytes(self.content.get(video_id, b"audio"))
         if source is not None:
             source(SourceInfo(format_id="251", codec="opus", bitrate_kbps=129))
         with self.lock:

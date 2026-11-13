@@ -17,7 +17,7 @@ from tunegrab.library.paths import (
     validate_template,
 )
 from tunegrab.library.playlists import playlist_file, read_m3u8, write_m3u8
-from tunegrab.models import Collection
+from tunegrab.models import Alternative, Collection
 
 # --- paths ----------------------------------------------------------------------
 
@@ -299,11 +299,13 @@ def _version(db: Path) -> int:
 def test_v1_history_is_upgraded_with_a_backup(tmp_path: Path) -> None:
     db = _v1_copy(tmp_path)
     with Archive(db) as archive:
-        assert archive.get_meta("schema_version") == archive_module.SCHEMA_VERSION == 3
+        assert archive.get_meta("schema_version") == archive_module.SCHEMA_VERSION == 4
         [record] = archive.all_downloads()
         assert record.video_id == "aaaaaaaaaaa" and record.track.title == "Song 1"
         columns = [r["name"] for r in archive._execute("PRAGMA table_info(failures)")]
         assert "format" in columns
+        assert record.review is None and record.source is None and not record.low_quality
+        assert archive.match_record("nope") is None
         assert archive.all_videos() == [] and archive.video_failures() == []
     backup = tmp_path / "tunegrab.db.bak-v1"
     assert _version(backup) == 1  # the untouched 0.4.x history
@@ -364,3 +366,38 @@ def test_newer_history_is_refused_not_discarded(
     with pytest.raises(archive_module.SchemaTooNewError, match="newer TuneGrab"):
         Archive(db)
     assert db.read_bytes() == before and not list(tmp_path.glob("*.corrupt-*"))
+
+
+def test_match_alternatives_and_review_flags(tmp_path: Path) -> None:
+    archive = Archive(tmp_path / "a.db")
+    track = make_track(1)
+    chosen = candidate_for(track)
+    others = [
+        Alternative(candidate=candidate_for(track, video_id="other000001"), score=61, reason="r")
+    ]
+    archive.put_match(track.key, chosen, 72, "auto", alternatives=others)
+    saved = archive.match_record(track.key)
+    assert saved is not None and saved.alternatives == others and not saved.manual
+    assert (saved.score, saved.reason) == (72, "auto")
+    archive.confirm_match(track.key)  # "keep this match"
+    assert archive.is_manual_match(track.key)
+    archive.put_match(track.key, chosen, 100, "manual override", manual=True)
+    kept = archive.match_record(track.key)
+    assert kept is not None and kept.alternatives == others  # None keeps what was saved
+    archive.put_match(track.key, chosen, 100, "m", manual=True, alternatives=[])
+    emptied = archive.match_record(track.key)
+    assert emptied is not None and emptied.alternatives == []
+    archive._execute("UPDATE match_cache SET alternatives_json = 'nonsense'")
+    broken = archive.match_record(track.key)
+    assert broken is not None and broken.alternatives == []  # unreadable: dropped, not fatal
+
+    file = tmp_path / "x.mp3"
+    archive.record_download(
+        track, file, "vid", "mp3", review="check it", source="Opus 48 kbps", low_quality=True
+    )
+    record = archive.get_download(track.key)
+    assert record is not None
+    assert (record.review, record.source, record.low_quality) == ("check it", "Opus 48 kbps", True)
+    archive.clear_review(track.key)
+    cleared = archive.get_download(track.key)
+    assert cleared is not None and cleared.review is None and cleared.low_quality

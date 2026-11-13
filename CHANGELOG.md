@@ -5,6 +5,12 @@ All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
 ## Unreleased
 
 ### Added
+- **Check this match.** A song TuneGrab wasn't sure about (a match score under 85, or a video
+  that says "live", "remix", "cover" and the like when the song doesn't) is marked in Downloads
+  and Library. Open it to see the saved video and up to three other candidates with channel,
+  length, score and a Listen link. "Use this one" downloads that video and replaces the file
+  only once the new one is tagged and ready; "Keep the saved one" stops the question. Either
+  choice is remembered for the song.
 - **Search finds albums and songs.** Type an album or song ("Discovery Daft Punk", "One More
   Time") to see matching albums and songs from YouTube Music and tick them into the queue. An
   artist's name still opens the artist.

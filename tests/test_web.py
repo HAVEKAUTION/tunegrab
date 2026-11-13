@@ -10,8 +10,19 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.fakes import ALBUM_ID, FakeServices, make_track
+from tests.fakes import (
+    ALBUM_ID,
+    COVER_VIDEO,
+    LIVE_VIDEO,
+    STUDIO_VIDEO,
+    FakeAudio,
+    FakeServices,
+    doubtful_candidates,
+    make_track,
+)
 from tunegrab.config import Settings, read_config_file
+from tunegrab.matching.matcher import Matcher
+from tunegrab.models import Track
 from tunegrab.services import Services
 from tunegrab.web import app as web_app
 from tunegrab.web import jobs as web_jobs
@@ -738,3 +749,117 @@ def test_shutdown_waits_for_running_downloads(services: FakeServices) -> None:
     assert job.finished_at is not None and job.cancelled
     assert all(t.status.finished for t in job.tasks)
     assert services.archive.job_history()[0]["id"] == job_id
+
+
+# --- match review ---------------------------------------------------------------------
+
+
+@pytest.fixture
+def doubtful(services: FakeServices) -> Track:
+    """The album is one song whose best match is a live version, with two alternatives."""
+    track = make_track(1)
+    services.metadata.tracks = [track]
+    audio = FakeAudio(results={track.title: doubtful_candidates(track)})
+    services.matcher = Matcher([audio], cache=services.archive)
+    return track
+
+
+def eventually(check: Any) -> None:
+    deadline = time.monotonic() + 5
+    while not check():
+        assert time.monotonic() < deadline, "condition never became true"
+        time.sleep(0.02)
+
+
+def download_album(client: TestClient) -> dict[str, Any]:
+    return wait_for(
+        client, client.post("/api/jobs", json={"url": ALBUM}).json()["id"], ("finished",)
+    )
+
+
+def test_check_this_match_then_choose_another(
+    client: TestClient, services: FakeServices, doubtful: Track
+) -> None:
+    job = download_album(client)
+    [task] = job["tasks"]
+    review = task["review"]
+    assert "live" in review["note"] and review["match"]["video_id"] == LIVE_VIDEO
+    assert [a["video_id"] for a in review["alternatives"]] == [STUDIO_VIDEO, COVER_VIDEO]
+    shown = {"title", "channel", "duration_s", "score", "reason", "url"}
+    assert shown <= set(review["alternatives"][0])
+    [song] = client.get("/api/library").json()["tracks"]
+    assert song["review"] == review and song["key"] == task["key"] == doubtful.key
+
+    choose = "/api/review/choose"
+    assert client.post(choose, json={"key": song["key"]}).status_code == 400
+    unknown = client.post(choose, json={"key": song["key"], "video_id": "elsewhere00"})
+    assert unknown.status_code == 409 and "other matches" in unknown.json()["detail"]
+    gone = client.post(choose, json={"key": "nope", "video_id": STUDIO_VIDEO})
+    assert gone.status_code == 404
+
+    services.downloader.content[STUDIO_VIDEO] = b"studio"
+    chosen = client.post(choose, json={"key": song["key"], "video_id": STUDIO_VIDEO})
+    assert chosen.status_code == 202 and "another match" in chosen.json()["name"]
+    done = wait_for(client, chosen.json()["id"], ("finished",))
+    [swapped] = done["tasks"]
+    assert swapped["status"] == "done" and swapped["review"] is None
+    assert STUDIO_VIDEO in swapped["match"]["url"] and swapped["path"] == song["path"]
+    assert Path(song["path"]).read_bytes() == b"studio"  # same file name, new audio
+    [after] = client.get("/api/library").json()["tracks"]
+    assert after["review"] is None and after["path"] == song["path"]
+    # the row in the first download stops asking too
+    eventually(lambda: client.get(f"/api/jobs/{job['id']}").json()["tasks"][0]["review"] is None)
+    saved = services.archive.match_record(doubtful.key)
+    assert saved is not None and saved.manual and saved.candidate.video_id == STUDIO_VIDEO
+    # the earlier video stays on offer, so the swap can be undone
+    assert LIVE_VIDEO in [a.candidate.video_id for a in saved.alternatives]
+
+
+def test_failed_swap_keeps_the_song_and_can_be_retried(
+    client: TestClient, services: FakeServices, doubtful: Track
+) -> None:
+    services.settings = services.settings.model_copy(update={"retries": 0})
+    job = download_album(client)
+    path = Path(job["tasks"][0]["path"])
+    services.downloader.fail_times = 99
+    body = {"key": doubtful.key, "video_id": STUDIO_VIDEO}
+    failed = wait_for(
+        client, client.post("/api/review/choose", json=body).json()["id"], ("finished",)
+    )
+    assert failed["counts"]["failed"] == 1 and failed["retryable"] == 1
+    assert path.read_bytes() == b"audio"  # the old file is untouched
+    [song] = client.get("/api/library").json()["tracks"]
+    assert song["review"] is not None and song["exists"]
+    assert client.get("/api/system").json()["failures"] == 0  # not a missing song
+
+    services.downloader.fail_times = 0
+    services.downloader.content[STUDIO_VIDEO] = b"studio"
+    retried = client.post(f"/api/jobs/{failed['id']}/retry")
+    assert retried.status_code == 202
+    again = wait_for(client, retried.json()["id"], ("finished",))
+    assert again["counts"]["done"] == 1 and STUDIO_VIDEO in again["tasks"][0]["match"]["url"]
+    assert path.read_bytes() == b"studio"
+    assert client.get("/api/library").json()["tracks"][0]["review"] is None
+
+
+def test_keep_this_match(client: TestClient, services: FakeServices, doubtful: Track) -> None:
+    job = download_album(client)
+    assert job["tasks"][0]["review"] is not None
+    assert client.post("/api/review/keep", json={"key": "nope"}).status_code == 404
+    kept = client.post("/api/review/keep", json={"key": doubtful.key})
+    assert kept.status_code == 200
+    assert client.get("/api/library").json()["tracks"][0]["review"] is None
+    assert client.get(f"/api/jobs/{job['id']}").json()["tasks"][0]["review"] is None
+    assert services.archive.is_manual_match(doubtful.key)
+    # downloading the song again doesn't bring the question back
+    Path(job["tasks"][0]["path"]).unlink()
+    again = download_album(client)
+    assert again["tasks"][0]["status"] == "done" and again["tasks"][0]["review"] is None
+
+
+def test_sure_matches_have_no_review(client: TestClient) -> None:
+    job = download_album(client)
+    assert all(t["review"] is None for t in job["tasks"])
+    tracks = client.get("/api/library").json()["tracks"]
+    assert all(t["review"] is None and t["source"] == "Opus 129 kbps" for t in tracks)
+    assert not any(t["low_quality"] for t in tracks)

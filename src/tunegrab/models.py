@@ -90,12 +90,21 @@ class Candidate(BaseModel):
         return f"https://www.youtube.com/watch?v={self.video_id}"
 
 
+class Alternative(BaseModel):
+    """Another video the matcher found for a song, kept so the user can swap to it."""
+
+    candidate: Candidate
+    score: float
+    reason: str
+
+
 class Match(BaseModel):
     track: Track
     candidate: Candidate | None
     score: float  # 0-100
     reason: str  # human-readable why
     cached: bool = False
+    alternatives: list[Alternative] = Field(default_factory=list)  # next-best, best first
 
     def accepted(self, threshold: float) -> bool:
         return self.candidate is not None and self.score >= threshold
@@ -149,6 +158,10 @@ class TrackTask(BaseModel):
     message: str = ""
     source: str | None = None  # what YouTube served, e.g. "Opus 129 kbps"
     low_quality: bool = False  # only a low-quality source was available
+    review: str | None = None  # why this match deserves a second look ("Check this match")
+    # the library file this download takes the place of (the user chose another match);
+    # it is only replaced once the new file is tagged and ready
+    replaces: str | None = None
 
 
 class Job(BaseModel):

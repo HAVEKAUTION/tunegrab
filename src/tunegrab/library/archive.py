@@ -16,12 +16,12 @@ from pydantic import ValidationError
 
 from tunegrab.config import set_aside, startup_warnings
 from tunegrab.errors import TuneGrabError
-from tunegrab.models import Candidate, Collection, Track
+from tunegrab.models import Alternative, Candidate, Collection, Track
 
 log = logging.getLogger(__name__)
 T = TypeVar("T")
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 # Version n -> the statements that upgrade a version n-1 history to n, run in one
 # transaction after a backup copy is made. SCHEMA below is always the newest layout (it
 # creates fresh histories and any table an older one lacks).
@@ -41,6 +41,12 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     updated_at TEXT NOT NULL
 );""",
     ),
+    4: (  # match review (other candidates, "check this match") and what YouTube served
+        "ALTER TABLE match_cache ADD COLUMN alternatives_json TEXT",
+        "ALTER TABLE downloads ADD COLUMN review TEXT",
+        "ALTER TABLE downloads ADD COLUMN source TEXT",
+        "ALTER TABLE downloads ADD COLUMN low_quality INTEGER NOT NULL DEFAULT 0",
+    ),
 }
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -57,7 +63,10 @@ CREATE TABLE IF NOT EXISTS downloads (
     artist TEXT,
     album TEXT,
     track_json TEXT NOT NULL,
-    downloaded_at TEXT NOT NULL
+    downloaded_at TEXT NOT NULL,
+    review TEXT,
+    source TEXT,
+    low_quality INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS match_cache (
     key TEXT PRIMARY KEY,
@@ -65,7 +74,8 @@ CREATE TABLE IF NOT EXISTS match_cache (
     score REAL NOT NULL,
     reason TEXT NOT NULL,
     manual INTEGER NOT NULL DEFAULT 0,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    alternatives_json TEXT
 );
 CREATE TABLE IF NOT EXISTS failures (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,10 +133,24 @@ class DownloadRecord:
     format: str | None
     track: Track
     downloaded_at: str
+    review: str | None = None  # why the match should be checked; None once it is fine
+    source: str | None = None  # what YouTube served, e.g. "Opus 129 kbps"
+    low_quality: bool = False
 
     @property
     def exists(self) -> bool:
         return self.path.is_file()
+
+
+@dataclass(frozen=True)
+class MatchRecord:
+    """The video remembered for a song, and the next-best ones found with it."""
+
+    candidate: Candidate
+    score: float
+    reason: str
+    manual: bool
+    alternatives: list[Alternative]
 
 
 @dataclass(frozen=True)
@@ -342,17 +366,28 @@ class Archive:
         return record.path if record and record.exists else None
 
     def record_download(
-        self, track: Track, path: Path, video_id: str | None, fmt: str | None
+        self,
+        track: Track,
+        path: Path,
+        video_id: str | None,
+        fmt: str | None,
+        *,
+        review: str | None = None,
+        source: str | None = None,
+        low_quality: bool = False,
     ) -> None:
         self._execute(
             """INSERT INTO downloads (key, spotify_id, path, video_id, format, title, artist,
-                                      album, track_json, downloaded_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                      album, track_json, downloaded_at, review, source,
+                                      low_quality)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(key) DO UPDATE SET
                  spotify_id=excluded.spotify_id, path=excluded.path,
                  video_id=excluded.video_id, format=excluded.format, title=excluded.title,
                  artist=excluded.artist, album=excluded.album,
-                 track_json=excluded.track_json, downloaded_at=excluded.downloaded_at""",
+                 track_json=excluded.track_json, downloaded_at=excluded.downloaded_at,
+                 review=excluded.review, source=excluded.source,
+                 low_quality=excluded.low_quality""",
             (
                 track.key,
                 track.spotify_id,
@@ -364,8 +399,15 @@ class Archive:
                 track.album,
                 track.model_dump_json(),
                 _now(),
+                review,
+                source,
+                int(low_quality),
             ),
         )
+
+    def clear_review(self, key: str) -> None:
+        """The user looked at this match and is happy with it."""
+        self._execute("UPDATE downloads SET review = NULL WHERE key = ?", (key,))
 
     def path_is_recorded(self, path: Path) -> bool:
         """True if any archived download (of any song) points at ``path``."""
@@ -387,6 +429,9 @@ class Archive:
             format=row["format"],
             track=Track.model_validate_json(row["track_json"]),
             downloaded_at=row["downloaded_at"],
+            review=row["review"] or None,
+            source=row["source"],
+            low_quality=bool(row["low_quality"]),
         )
 
     # --- match cache -----------------------------------------------------------------
@@ -399,20 +444,50 @@ class Archive:
         row = rows[0]
         return Candidate.model_validate_json(row["candidate_json"]), row["score"], row["reason"]
 
+    def match_record(self, key: str) -> MatchRecord | None:
+        rows = self._execute("SELECT * FROM match_cache WHERE key = ?", (key,))
+        found = _parse_rows(
+            rows,
+            lambda r: MatchRecord(
+                candidate=Candidate.model_validate_json(r["candidate_json"]),
+                score=r["score"],
+                reason=r["reason"],
+                manual=bool(r["manual"]),
+                alternatives=_alternatives(r["alternatives_json"]),
+            ),
+            "match",
+        )
+        return found[0] if found else None
+
     def put_match(
-        self, key: str, candidate: Candidate, score: float, reason: str, manual: bool = False
+        self,
+        key: str,
+        candidate: Candidate,
+        score: float,
+        reason: str,
+        manual: bool = False,
+        alternatives: list[Alternative] | None = None,
     ) -> None:
-        """Cache a match. Automatic matches never overwrite a manual override."""
+        """Cache a match. Automatic matches never overwrite a manual override.
+        ``alternatives`` None keeps the ones already saved for the song."""
+        saved = None if alternatives is None else dumps([a.model_dump() for a in alternatives])
         self._execute(
-            """INSERT INTO match_cache (key, candidate_json, score, reason, manual, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?)
+            """INSERT INTO match_cache (key, candidate_json, score, reason, manual, updated_at,
+                                        alternatives_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(key) DO UPDATE SET
                  candidate_json=excluded.candidate_json, score=excluded.score,
                  reason=excluded.reason, manual=excluded.manual,
-                 updated_at=excluded.updated_at
+                 updated_at=excluded.updated_at,
+                 alternatives_json=COALESCE(excluded.alternatives_json,
+                                            match_cache.alternatives_json)
                WHERE match_cache.manual = 0 OR excluded.manual = 1""",
-            (key, candidate.model_dump_json(), score, reason, int(manual), _now()),
+            (key, candidate.model_dump_json(), score, reason, int(manual), _now(), saved),
         )
+
+    def confirm_match(self, key: str) -> None:
+        """Keep the remembered video for good: automatic matches no longer replace it."""
+        self._execute("UPDATE match_cache SET manual = 1 WHERE key = ?", (key,))
 
     def clear_match(self, key: str) -> None:
         self._execute("DELETE FROM match_cache WHERE key = ?", (key,))
@@ -638,6 +713,17 @@ class Archive:
 
 def dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
+
+
+def _alternatives(raw: str | None) -> list[Alternative]:
+    """Saved alternatives; unreadable ones (an older layout) are dropped, not fatal."""
+    if not raw:
+        return []
+    try:
+        return [Alternative.model_validate(item) for item in json.loads(raw)]
+    except (ValidationError, ValueError, TypeError) as exc:
+        log.warning("skipping unreadable saved alternatives: %s", exc)
+        return []
 
 
 def _parse_rows(

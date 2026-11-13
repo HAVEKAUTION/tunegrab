@@ -25,15 +25,17 @@ from typing import Protocol
 from tunegrab.config import Settings
 from tunegrab.download.convert import extension
 from tunegrab.download.ytdlp import (
+    LOW_QUALITY_NOTE,
     DownloadCancelled,
     Downloader,
     DownloadError,
     SourceInfo,
 )
 from tunegrab.library.archive import Archive
-from tunegrab.library.paths import move_into_place, render_path, template_fields
+from tunegrab.library.paths import move_into_place, render_path, replace_file, template_fields
 from tunegrab.library.playlists import playlist_file, write_m3u8
 from tunegrab.matching.matcher import Matcher
+from tunegrab.matching.scoring import review_note
 from tunegrab.metadata.resolver import Resolver
 from tunegrab.models import Candidate, Collection, Job, Match, TaskStatus, Track, TrackTask
 from tunegrab.pacing import Pacer
@@ -318,7 +320,7 @@ class Pipeline(TaskRunner):
             self._set(job, task, TaskStatus.SKIPPED, "cancelled")
             return
         try:
-            if self._skip_existing(job, task):
+            if task.replaces is None and self._skip_existing(job, task):
                 return
             self._run_attempts(
                 job,
@@ -332,6 +334,8 @@ class Pipeline(TaskRunner):
             self._fail_with(job, task, exc)
 
     def _record_failure(self, job: Job, task: TrackTask) -> None:
+        if task.replaces is not None:
+            return  # the song is still in the library; nothing is missing to retry later
         self.archive.record_failure(
             job.input,
             job.collection,
@@ -432,7 +436,7 @@ class Pipeline(TaskRunner):
 
             # 6. move into the library
             self._check_cancel()
-            target = move_into_place(audio, self.target_path(job, task))
+            target = self._place(job, task, audio)
         if lyrics is not None and lyrics.synced and self.settings.lrc:
             try:
                 write_lrc(target, lyrics.synced)
@@ -444,12 +448,68 @@ class Pipeline(TaskRunner):
         task.progress = 1.0
         message = ""
         try:
-            self.archive.record_download(track, target, candidate.video_id, self.settings.format)
+            chosen = task.match if task.match is not None else match
+            if task.replaces is not None:  # the user picked this video: remember it for good
+                self.archive.put_match(
+                    track.key,
+                    candidate,
+                    chosen.score,
+                    chosen.reason,
+                    manual=True,
+                    alternatives=chosen.alternatives,
+                )
+            else:
+                task.review = self._review(track, candidate, chosen)
+            self.archive.record_download(
+                track,
+                target,
+                candidate.video_id,
+                self.settings.format,
+                review=task.review,
+                source=(task.source or "").removesuffix(LOW_QUALITY_NOTE) or None,
+                low_quality=task.low_quality,
+            )
             self.archive.resolve_failures(track.key)
         except Exception:
             log.exception("could not record %s in the download history", target)
             message = "saved, but not added to the download history"
         self._set(job, task, TaskStatus.DONE, message)
+
+    def _place(self, job: Job, task: TrackTask, audio: Path) -> Path:
+        """Move the tagged file into the library. A file the user asked to swap for
+        another match is only replaced here, once its replacement is complete."""
+        old = Path(task.replaces) if task.replaces else None
+        if old is None or not old.is_file():
+            return move_into_place(audio, self.target_path(job, task))
+        if old.suffix.lower() != audio.suffix.lower():  # the format changed: new name
+            target = move_into_place(audio, self.target_path(job, task))
+            try:
+                old.unlink()
+            except OSError as exc:
+                log.warning("could not remove the replaced file %s: %s", old, exc)
+            return target
+        try:
+            return replace_file(audio, old)
+        except PermissionError as exc:
+            raise TaskFailed(
+                f"Couldn't replace {old.name}: another program is using it. Close it there "
+                "and choose the match again. Your current file wasn't changed.",
+                retryable=False,
+            ) from exc
+
+    def _review(self, track: Track, candidate: Candidate, match: Match) -> str | None:
+        """Why this match should be checked by the user, if it should. Fills in the
+        alternatives saved with a cached match so the page can offer them."""
+        note = review_note(track, candidate, match.score)
+        if note is None:
+            return None
+        saved = self.archive.match_record(track.key)
+        if saved is not None and saved.candidate.video_id == candidate.video_id:
+            if saved.manual:
+                return None  # already checked and kept
+            if not match.alternatives:
+                match.alternatives = saved.alternatives
+        return note
 
     def _download(
         self,

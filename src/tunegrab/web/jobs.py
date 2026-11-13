@@ -19,10 +19,19 @@ from tunegrab.config import (
 )
 from tunegrab.download.ytdlp import DownloadError
 from tunegrab.imports import collection_from_csv
-from tunegrab.library.archive import VideoRecord
+from tunegrab.library.archive import DownloadRecord, VideoRecord
 from tunegrab.matching.base import SearchError
 from tunegrab.metadata.base import MetadataError
-from tunegrab.models import Collection, Job, Match, TaskStatus, Track, TrackTask
+from tunegrab.models import (
+    Alternative,
+    Candidate,
+    Collection,
+    Job,
+    Match,
+    TaskStatus,
+    Track,
+    TrackTask,
+)
 from tunegrab.pipeline import Pipeline
 from tunegrab.preflight import JobAborted
 from tunegrab.runner import unexpected_message as unexpected_error
@@ -151,12 +160,44 @@ def job_state(job: Job) -> str:
 _revisions = itertools.count(1)
 
 
+def candidate_payload(candidate: Candidate, score: float, reason: str) -> dict[str, Any]:
+    """A YouTube video as the page shows it in a match: what, whose, how long, how sure."""
+    return {
+        "video_id": candidate.video_id,
+        "url": candidate.url,
+        "title": candidate.title,
+        "channel": ", ".join(candidate.artists),
+        "duration_s": candidate.duration_s,
+        "score": round(score),
+        "reason": reason,
+    }
+
+
+def review_payload(
+    note: str | None, current: dict[str, Any] | None, alternatives: list[Alternative]
+) -> dict[str, Any] | None:
+    """What "Check this match" shows: why, the saved video and the other candidates."""
+    if not note:
+        return None
+    return {
+        "note": note,
+        "match": current,
+        "alternatives": [candidate_payload(a.candidate, a.score, a.reason) for a in alternatives],
+    }
+
+
 def task_payload(job: Job, task: TrackTask) -> dict[str, Any]:
     match = task.match
+    current = (
+        candidate_payload(match.candidate, match.score, match.reason)
+        if match is not None and match.candidate is not None
+        else None
+    )
     return {
         "rev": next(_revisions),
         "job_id": job.id,
         "id": task.id,
+        "key": task.track.key,
         "position": task.position,
         "title": task.track.title,
         "artists": task.track.artists,
@@ -170,17 +211,15 @@ def task_payload(job: Job, task: TrackTask) -> dict[str, Any]:
         "source": task.source,
         "low_quality": task.low_quality,
         "retried": task.id in job.retried,
-        "match": (
-            {
-                "url": match.candidate.url,
-                "title": match.candidate.title,
-                "score": round(match.score),
-                "reason": match.reason,
-            }
-            if match is not None and match.candidate is not None
-            else None
-        ),
+        "match": current,
+        "review": review_payload(task.review, current, match.alternatives if match else []),
     }
+
+
+def record_format(record: DownloadRecord) -> str | None:
+    """The audio format a saved song is in (from its record, else its file name)."""
+    suffix = record.path.suffix.lstrip(".").lower()
+    return record.format or (suffix if suffix in ("mp3", "m4a", "opus", "flac") else None)
 
 
 MAX_QUEUED_EVENTS = 1000
@@ -237,6 +276,9 @@ class JobManager:
         self.loop.call_soon_threadsafe(self._publish, "task", task_data)
         if task.status.finished:
             self.loop.call_soon_threadsafe(self._publish, "job", summary)
+        if task.replaces is not None and task.status == TaskStatus.DONE:
+            # the song has the video the user chose: earlier rows stop asking about it
+            self.loop.call_soon_threadsafe(self._reviewed, task.track.key)
 
     def subscribe(self) -> asyncio.Queue[str]:
         queue: asyncio.Queue[str] = asyncio.Queue()
@@ -526,6 +568,71 @@ class JobManager:
             jobs.append(job)
         return jobs
 
+    # -- match review
+    def _reviewed(self, key: str) -> None:
+        """Drop "Check this match" from every song row in memory for ``key``."""
+        for job in self.jobs.values():
+            for task in job.tasks:
+                if task.review and task.track.key == key:
+                    task.review = None
+                    self._publish("task", task_payload(job, task))
+
+    def keep_match(self, key: str) -> None:
+        """The user checked the match and it's right: stop flagging it, never rematch it."""
+        archive = self.services.archive
+        if archive.get_download(key) is None:
+            raise LookupError("That song isn't in your library any more.")
+        archive.clear_review(key)
+        archive.confirm_match(key)
+        self._reviewed(key)
+
+    def choose_match(self, key: str, video_id: str) -> Job:
+        """Download another candidate for a saved song; it takes the old file's place once
+        it is tagged and ready, and is remembered as the song's video."""
+        archive = self.services.archive
+        record = archive.get_download(key)
+        if record is None:
+            raise LookupError("That song isn't in your library any more.")
+        saved = archive.match_record(key)
+        options = saved.alternatives if saved is not None else []
+        picked = next((a for a in options if a.candidate.video_id == video_id), None)
+        if saved is None or picked is None:
+            raise ValueError("That video isn't one of the other matches saved for this song.")
+        for job in self.jobs.values():
+            if not (job.finished_at or job.error) and any(
+                t.replaces is not None and t.track.key == key for t in job.tasks
+            ):
+                raise ValueError("This song is already being replaced. See Downloads.")
+        # the video saved until now stays on offer, so the swap can be undone
+        previous = Alternative(candidate=saved.candidate, score=saved.score, reason=saved.reason)
+        match = Match(
+            track=record.track,
+            candidate=picked.candidate.model_copy(update={"source": "manual"}),
+            score=100.0,
+            reason="you chose this video",
+            alternatives=[previous, *(a for a in options if a is not picked)],
+        )
+        fmt = record_format(record)
+        job = Job(
+            input=record.track.display,
+            format=fmt,
+            collection=Collection(
+                kind="track",
+                name=f"{record.track.title} (another match)",
+                tracks=[record.track],
+                source="review",
+            ),
+            tasks=[
+                TrackTask(track=record.track, position=1, match=match, replaces=str(record.path))
+            ],
+        )
+        self.jobs[job.id] = job
+        self.loop = asyncio.get_running_loop()
+        self._publish("job", job_summary(job))
+        pipeline = self.services.pipeline(on_event=self._on_event, settings=self._settings_for(fmt))
+        self._spawn(self._run(job, pipeline))
+        return job
+
     def retry(self, job_id: str, task_ids: set[str] | None = None) -> Job:
         """Re-run the failed tracks of a job (or only ``task_ids`` of them)."""
         old = self.jobs[job_id]
@@ -538,7 +645,16 @@ class JobManager:
             raise ValueError("This job has no failed tracks.")
         old.retried.update(t.id for t in failed)
         self._publish("job", job_summary(old))
-        tasks = [TrackTask(track=t.track, position=t.position) for t in failed]
+        tasks = [
+            TrackTask(
+                track=t.track,
+                position=t.position,
+                # a replacement keeps the video the user chose and the file it replaces
+                replaces=t.replaces,
+                match=t.match if t.replaces is not None else None,
+            )
+            for t in failed
+        ]
         video = self.video_jobs.get(job_id)
         collection = old.collection
         if collection is not None and video is None:  # video jobs keep "video:<mode>"

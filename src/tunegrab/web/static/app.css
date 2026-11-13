@@ -244,6 +244,18 @@ details.tracks table { margin-top: var(--s-2); }
 .history td { font-size: var(--fs-sm); }
 
 /* library */
+/* match review ("Check this match"): the saved video and the other candidates */
+.review-btn { margin-top: var(--s-1); color: var(--warn); border-color: var(--warn-line); }
+.review-btn:hover { background: var(--warn-soft); border-color: var(--warn); }
+.review-btn svg:last-child { transition: transform var(--t-fast) var(--ease); }
+.review-btn[aria-expanded="true"] svg:last-child { transform: rotate(180deg); }
+.review { display: grid; gap: var(--s-2); max-width: 760px; margin-top: var(--s-2); padding: var(--s-3); border: var(--hair); border-radius: var(--r-md); background: var(--n-2); }
+.review ul { list-style: none; display: grid; margin: 0; padding: 0; }
+.review li { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) 0; }
+.review li + li { border-top: var(--hair); }
+.review li .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.review .row { flex-wrap: wrap; }
+tr:has(.review) > td { vertical-align: top; }
 .lib-artist { margin-top: var(--s-6); }
 .lib-artist > h3 { padding-bottom: var(--s-2); border-bottom: var(--hair); margin-bottom: var(--s-3); }
 .lib-album { display: grid; grid-template-columns: 72px 1fr; gap: var(--s-4); margin-bottom: var(--s-5); }

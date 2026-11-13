@@ -18,7 +18,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from tunegrab import __version__, storage
 from tunegrab.browse import SearchResults
@@ -37,6 +37,7 @@ from tunegrab.config import (
 from tunegrab.doctor import Status, check_output_dir, run_all, update_ytdlp
 from tunegrab.download.ytdlp import DownloadError
 from tunegrab.errors import TuneGrabError
+from tunegrab.library.archive import DownloadRecord
 from tunegrab.library.paths import TemplateError, validate_template
 from tunegrab.matching.base import SearchError
 from tunegrab.metadata.base import MetadataError, NotFoundError
@@ -63,8 +64,10 @@ from tunegrab.web.jobs import (
     JobManager,
     JobRequest,
     VideoRequest,
+    candidate_payload,
     job_summary,
     release_payload,
+    review_payload,
     task_payload,
 )
 
@@ -146,6 +149,24 @@ class OpenRequest(BaseModel):
 
 class FixRequest(BaseModel):
     youtube_url: str
+
+
+class ReviewRequest(BaseModel):
+    """A saved song (its archive key) and, to swap it, the video to use instead."""
+
+    key: str = Field(min_length=1, max_length=2000)
+    video_id: str | None = Field(default=None, max_length=64)
+
+
+def library_review(services: Services, record: DownloadRecord) -> dict[str, Any] | None:
+    """ "Check this match" for a Library song: the saved video and the other candidates."""
+    if not record.review:
+        return None
+    saved = services.archive.match_record(record.key)
+    if saved is None or saved.candidate.video_id != record.video_id:
+        return review_payload(record.review, None, [])  # the candidates weren't kept
+    current = candidate_payload(saved.candidate, saved.score, saved.reason)
+    return review_payload(record.review, current, saved.alternatives)
 
 
 def manual_candidate(services: Services, track: Track, video_id: str) -> Candidate:
@@ -513,6 +534,28 @@ def create_app(
             raise HTTPException(409, str(exc)) from exc
         return job_summary(retried)
 
+    @app.post("/api/review/choose", status_code=202)
+    async def review_choose(body: ReviewRequest) -> dict[str, Any]:
+        """Swap a saved song for another of the videos found for it."""
+        if not body.video_id:
+            raise HTTPException(400, "Choose one of the other matches.")
+        try:
+            job = manager.choose_match(body.key, body.video_id)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return job_summary(job)
+
+    @app.post("/api/review/keep")
+    async def review_keep(body: ReviewRequest) -> dict[str, Any]:
+        """The saved match is right: stop asking about it."""
+        try:
+            manager.keep_match(body.key)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return {"kept": body.key}
+
     @app.post("/api/jobs/{job_id}/resume")
     def resume_job(job_id: str) -> dict[str, Any]:
         job = _job(job_id)
@@ -547,6 +590,9 @@ def create_app(
                     "path": str(r.path),
                     "exists": r.exists,
                     "format": r.format,
+                    "source": r.source,
+                    "low_quality": r.low_quality,
+                    "review": library_review(services, r),
                     "downloaded_at": r.downloaded_at,
                 }
                 for r in records

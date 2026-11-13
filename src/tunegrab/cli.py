@@ -848,7 +848,15 @@ def _finish_replacement(
             move_into_place(backup, original)
         except OSError as exc:
             console.print(f"[red]Your old file is at {escape(str(backup))}[/] ({exc}).")
-    services.archive.record_download(record.track, record.path, record.video_id, record.format)
+    services.archive.record_download(
+        record.track,
+        record.path,
+        record.video_id,
+        record.format,
+        review=record.review,
+        source=record.source,
+        low_quality=record.low_quality,
+    )
     console.print("The new version wasn't downloaded; your old file is back in place.")
 
 

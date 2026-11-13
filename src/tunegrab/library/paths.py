@@ -216,6 +216,28 @@ def claim_path(path: Path) -> Path:
     raise FileExistsError(f"Too many files named like {path}")
 
 
+def replace_file(source: Path, target: Path) -> Path:
+    """Put ``source`` in the place of the existing file ``target`` in one step, so the old
+    file is there until the new one has its name. Raises OSError and leaves ``target``
+    as it was when that isn't possible (e.g. it's open in a player on Windows)."""
+    try:
+        source.replace(target)
+    except PermissionError:
+        raise
+    except OSError:  # another drive: bring the new file next to the old one, then swap
+        staged = target.with_name(f".{target.name}.tunegrab-new")
+        try:
+            shutil.copy2(source, staged)
+            staged.replace(target)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                staged.unlink()
+            raise
+        with contextlib.suppress(OSError):
+            source.unlink()
+    return target
+
+
 def move_into_place(source: Path, target: Path) -> Path:
     """Move ``source`` to ``target`` (or a free ``target (n)`` name) without ever
     overwriting another file, even when several downloads finish at once. Returns the

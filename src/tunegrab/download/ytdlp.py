@@ -44,6 +44,7 @@ CLIENT_LADDER: tuple[tuple[str, ...] | None, ...] = (
     ("web_safari",),
 )
 LOW_QUALITY_FORMATS = frozenset({"18", "17", "36"})  # muxed low-res video formats
+LOW_QUALITY_NOTE = " (low quality source)"
 
 ErrorKind = Literal["unavailable", "rate_limited", "blocked", "other"]
 
@@ -174,7 +175,7 @@ class SourceInfo:
 
     @property
     def label(self) -> str:
-        return self.plain_label + (" (low quality source)" if self.low_quality else "")
+        return self.plain_label + (LOW_QUALITY_NOTE if self.low_quality else "")
 
 
 SourceCallback = Callable[[SourceInfo], None]

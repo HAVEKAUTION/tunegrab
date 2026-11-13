@@ -28,6 +28,8 @@ PAIRS = [
     ("--accent-ink", "--accent", 4.5, "primary button hover"),
     ("--accent", "--n-1", 4.5, "success text"),
     ("--warn", "--n-1", 4.5, "warning text"),
+    ("--warn", "--n-2", 4.5, "match review note and button"),
+    ("--text-1", "--n-2", 4.5, "match review panel"),
     ("--bad", "--n-1", 4.5, "error text"),
     ("--bad", "--n-3", 4.5, "error pill"),
     ("--info", "--n-1", 4.5, "links, info text"),
