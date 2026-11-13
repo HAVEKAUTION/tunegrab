@@ -1,0 +1,37 @@
+name: Release
+
+# Push a tag like v0.6.0 to publish: runs CI, then attaches the app zip, SHA256SUMS and
+# install.ps1 to a GitHub release. install.ps1 checks the zip against SHA256SUMS.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # create the release and upload its files
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - name: Build the zip and its checksum
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          git archive --format=zip --prefix="tunegrab-${tag}/" -o "tunegrab-${tag}.zip" "${tag}"
+          sha256sum "tunegrab-${tag}.zip" > SHA256SUMS
+          cat SHA256SUMS
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          notes="$(awk -v v="${tag#v}" '$0 ~ "^## "v" " {on=1; next} on && /^## / {exit} on' CHANGELOG.md)"
+          gh release create "${tag}" "tunegrab-${tag}.zip" SHA256SUMS install.ps1 \
+            --title "TuneGrab ${tag#v}" --notes "${notes:-See CHANGELOG.md}" \
+            $([[ "${tag}" == *-* ]] && echo --prerelease)
