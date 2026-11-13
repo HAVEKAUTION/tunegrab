@@ -66,7 +66,7 @@
             <input id="url" class="input" type="text" placeholder="Spotify or YouTube link, or an artist, album or song" required></label>
           <label><span class="sr">Audio format</span>
             <select id="format" class="select" title="Audio format for these downloads. M4A and Opus keep YouTube's original audio; MP3 and FLAC re-encode it, which never adds quality.">
-              <option value="">Default format</option><option value="m4a">M4A · original quality</option>
+              <option value="" id="format-default">Default format</option><option value="m4a">M4A · original quality</option>
               <option value="opus">Opus · original quality</option><option value="mp3">MP3 · re-encoded</option><option value="flac">FLAC · re-encoded</option></select></label>
           <button class="btn primary" type="submit" id="browse-btn"><svg class="i"><use href="#i-search"/></svg>Browse</button>
           <button class="btn" type="button" id="now-btn" title="Download the whole link straight away, or the top song for what you typed"><svg class="i"><use href="#i-download"/></svg>Download now</button>
@@ -162,8 +162,7 @@
         <div class="card"><div class="row between"><h3>Storage</h3>
           <button class="btn sm" id="st-clean"><svg class="i"><use href="#i-x"/></svg>Free up space</button></div>
           <p class="muted small lead">What TuneGrab keeps besides your music. Freeing space never touches your music, settings or download history.</p>
-          <table class="checks" aria-label="Storage"><tbody id="st-table"><tr><td class="muted small">Measuring…</td></tr></tbody></table>
-          <label class="check small mt-3"><input id="st-uv" type="checkbox"> Include uv's package cache (shared by every uv project; only unused packages are removed)</label></div>
+          <table class="checks" aria-label="Storage"><tbody id="st-table"><tr><td class="muted small">Measuring…</td></tr></tbody></table></div>
         <div class="card"><h3>About</h3>
           <dl class="kv mt-3" id="about"></dl></div>
       </section>

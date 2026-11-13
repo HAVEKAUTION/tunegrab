@@ -76,6 +76,10 @@ All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
 - The queue bar says "1 song", not "1 songs"; Settings fields line up when only one has help.
 
 ### Changed
+- The format picker on Get music names the default ("M4A (default)") instead of saying
+  "Default format".
+- Settings → Storage no longer offers to prune uv's package cache; `tunegrab clean --uv-cache`
+  still does.
 - **About** (Settings) now names the licence and links to the source.
 - A finished download's status pill carries the same tick as its songs; loading placeholders
   pulse instead of sweeping a gradient.

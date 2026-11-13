@@ -319,8 +319,8 @@ or yt-dlp is out (checked once a day; **Settings → Updates** turns it off).
 
 Besides your music, TuneGrab keeps the app folder (about 50 MB) and its settings, history
 and logs in `%LOCALAPPDATA%\tunegrab` (a few MB). **Settings → Storage → Free up space**
-(or `tunegrab clean`) clears leftovers and can prune uv's shared package cache. Your music,
-settings and history stay.
+(or `tunegrab clean`) clears leftovers; `tunegrab clean --uv-cache` also prunes uv's shared
+package cache. Your music, settings and history stay.
 
 **Uninstall** (installed with the one-liner):
 

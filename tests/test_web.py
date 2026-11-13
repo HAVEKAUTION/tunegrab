@@ -997,3 +997,14 @@ def test_library_shows_what_youtube_served(client: TestClient, services: FakeSer
     # the label is the plain source; the flag carries "low quality"
     assert (library["Song 2"]["source"], library["Song 2"]["low_quality"]) == ("AAC 96 kbps", True)
     assert library["Song 2"]["format"] == "mp3"
+
+
+def test_page_follows_the_cut_list(client: TestClient) -> None:
+    page, script = client.get("/").text, client.get("/app.js").text
+    # the format picker's first option is filled in with the saved default ("M4A (default)")
+    assert 'id="format-default"' in page and "showDefaultFormat(values.format)" in script
+    # uv's package cache is a CLI-only option (tunegrab clean --uv-cache)
+    assert "package cache" not in page
+    assert "uv_cache" not in script and "st-uv" not in script
+    # no inline styles: spacing and colour come from app.css
+    assert 'style="' not in page

@@ -68,19 +68,16 @@ window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
 // ============================================================== storage
 const fmtBytes = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(2)} GB`;
 async function loadStorage() {
-  const uv = $("#st-uv").checked;
   try {
-    const { items } = await api(`/api/storage${uv ? "?uv=1" : ""}`);
+    const { items } = await api("/api/storage");
     $("#st-table").innerHTML = items.map((i) => `<tr><td><div class="t-title">${esc(i.label)}</div><div class="xs faint mono">${esc(i.path)}</div>
       ${i.note ? `<div class="xs faint">${esc(i.note)}</div>` : ""}</td><td class="c-end tnum">${fmtBytes(i.size)}</td></tr>`).join("");
   } catch (err) { $("#st-table").innerHTML = `<tr><td class="small error-text">${esc(err.message)}</td></tr>`; }
 }
-$("#st-uv").addEventListener("change", () => { $("#st-table").innerHTML = `<tr><td class="muted small">Measuring…</td></tr>`; loadStorage(); });
 $("#st-clean").addEventListener("click", async () => {
   const btn = $("#st-clean"); btn.disabled = true;
-  const keys = ["tmp", "logs", "database", "ytdlp_cache", ...($("#st-uv").checked ? ["uv_cache"] : [])];
   try {
-    const r = await api("/api/storage/clean", { method: "POST", body: JSON.stringify({ keys }) });
+    const r = await api("/api/storage/clean", { method: "POST", body: JSON.stringify({ keys: ["tmp", "logs", "database", "ytdlp_cache"] }) });
     toast(r.freed ? `Freed ${fmtBytes(r.freed)}.` : "Nothing to free: already tidy.");
   } catch (err) { toast(err.message, { kind: "bad" }); }
   btn.disabled = false; loadStorage();
@@ -1177,7 +1174,14 @@ function readForm() {
   for (const key of SETTING_KEYS) { const el = $(`#s-${key}`); v[key] = el.type === "checkbox" ? el.checked : el.value; }
   return v;
 }
+// The format picker on Get music names what "default" currently is ("M4A (default)").
+const FORMAT_NAMES = { m4a: "M4A", opus: "Opus", mp3: "MP3", flac: "FLAC" };
+function showDefaultFormat(format) {
+  const name = FORMAT_NAMES[format];
+  $("#format-default").textContent = name ? `${name} (default)` : "Default format";
+}
 function fillForm(values) {
+  showDefaultFormat(values.format);
   for (const key of SETTING_KEYS) {
     const el = $(`#s-${key}`);
     if (el.type === "checkbox") el.checked = !!values[key]; else el.value = values[key] ?? "";
@@ -1307,6 +1311,7 @@ $("#keys-dialog").addEventListener("click", (e) => { if (e.target.closest("[data
   renderQueue();
   renderFirstRun();
   connect();
+  loadSettings(); // also names the default in the format picker
   await loadSystem();
   try { for (const job of await api("/api/jobs")) upsertJob(job); }
   catch (err) { toast(`Couldn't load downloads: ${err.message}`, { kind: "bad" }); }
