@@ -76,6 +76,8 @@ All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
 - The queue bar says "1 song", not "1 songs"; Settings fields line up when only one has help.
 
 ### Changed
+- Library rows are one line each (about 39 px): the artist is shown under a song only when it
+  differs from the heading it sits under. Playlist rows are tighter too.
 - The format picker on Get music names the default ("M4A (default)") instead of saying
   "Default format".
 - Settings → Storage no longer offers to prune uv's package cache; `tunegrab clean --uv-cache`

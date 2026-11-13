@@ -987,7 +987,7 @@ function renderLibrary() {
   const tracks = lib.tracks.filter((t) => !q || [t.title, t.album, t.album_artist, ...t.artists].some((v) => (v || "").toLowerCase().includes(q)));
   const missing = lib.tracks.filter((t) => !t.exists).length;
   $("#lib-meta").innerHTML = `${plural(lib.tracks.length, "song")} in <span class="mono">${esc(lib.root)}</span>${missing ? ` · <span class="warn-text">${missing} moved or deleted</span>` : ""}`;
-  $("#playlists").innerHTML = lib.playlists.length && !q ? `<div class="card section"><h3>Playlists</h3><table><tbody>
+  $("#playlists").innerHTML = lib.playlists.length && !q ? `<div class="card section"><h3>Playlists</h3><table class="dense"><tbody>
     ${lib.playlists.map(playlistRow).join("")}</tbody></table></div>` : "";
   const videos = (lib.videos || []).filter((v) => !q || [v.title, v.uploader].some((x) => (x || "").toLowerCase().includes(q)));
   $("#videos").innerHTML = videos.length ? `<div class="card section"><h3>Videos</h3><table><tbody>
@@ -1017,10 +1017,10 @@ function renderLibrary() {
     return `<section class="lib-artist"><h3>${esc(artist)}</h3>${[...albums.keys()].sort().map((album) => {
       const list = albums.get(album).sort((a, b) => (a.track_number || 0) - (b.track_number || 0));
       const cover = (list.find((t) => t.cover_url) || {}).cover_url;
-      return `<div class="lib-album"><div class="cover">${cover ? `<img src="${esc(cover)}" alt="" loading="lazy">` : icon("music")}</div><div><h4>${esc(album)}</h4><table><tbody>${list.map((t) => `<tr>
+      return `<div class="lib-album"><div class="cover">${cover ? `<img src="${esc(cover)}" alt="" loading="lazy">` : icon("music")}</div><div><h4>${esc(album)}</h4><table class="dense"><tbody>${list.map((t) => `<tr>
         <td class="c-num tnum">${t.track_number || ""}</td>
-        <td><span class="t-title">${esc(t.title)}</span>${t.exists ? "" : ` <span class="pill warn">Missing file</span>`}${t.low_quality ? ` <span class="pill warn" title="YouTube only had a low-quality version of this song">${icon("alert")}Low quality source</span>` : ""}<div class="t-sub">${esc(t.artists.join(", "))}</div>${reviewHtml(t)}</td>
-        <td class="xs faint"${t.source ? ` title="What YouTube served, before TuneGrab saved it as ${esc((t.format || "audio").toUpperCase())}"` : ""}>${esc((t.format || "").toUpperCase())}${t.source ? ` · from ${esc(t.source)}` : ""}</td><td class="c-time tnum">${fmtTime(t.duration_s)}</td>
+        <td><span class="t-title">${esc(t.title)}</span>${t.exists ? "" : ` <span class="pill warn">Missing file</span>`}${t.low_quality ? ` <span class="pill warn" title="YouTube only had a low-quality version of this song">${icon("alert")}Low quality source</span>` : ""}${t.artists.join(", ") === artist ? "" : `<div class="t-sub">${esc(t.artists.join(", "))}</div>`}${reviewHtml(t)}</td>
+        <td class="xs faint c-meta"${t.source ? ` title="What YouTube served, before TuneGrab saved it as ${esc((t.format || "audio").toUpperCase())}"` : ""}>${esc((t.format || "").toUpperCase())}${t.source ? ` · from ${esc(t.source)}` : ""}</td><td class="c-time tnum">${fmtTime(t.duration_s)}</td>
         <td class="c-end">${t.exists ? `<button class="btn ghost sm" data-show="${esc(t.path)}" aria-label="Show ${esc(t.title)} in folder">${icon("folder")}Show</button>` : ""}</td></tr>`).join("")}
         </tbody></table></div></div>`;
     }).join("")}</section>`;
