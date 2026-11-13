@@ -4,27 +4,47 @@
 
 # TuneGrab
 
-**Pick the albums and songs you want from Spotify, and get a tidy, fully tagged music library on your own drive.**
-<br>Plus videos and clips from YouTube and other sites.
+**Pick albums, playlists and songs from Spotify. Get a tidy, fully tagged music library on your own drive.**
 
-![Version](https://img.shields.io/badge/version-0.4.1-22c55e)
-![Python](https://img.shields.io/badge/python-3.11%2B-3776ab)
-![Platforms](https://img.shields.io/badge/runs%20on-Windows%20%7C%20macOS%20%7C%20Linux-555)
-![Local only](https://img.shields.io/badge/runs-100%25%20local-0ea5e9)
 [![CI](https://github.com/HAVEKAUTION/tunegrab/actions/workflows/ci.yml/badge.svg)](https://github.com/HAVEKAUTION/tunegrab/actions/workflows/ci.yml)
+![Platforms](https://img.shields.io/badge/runs%20on-Windows%20%7C%20macOS%20%7C%20Linux-555)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
-
-[Features](#-features) · [Videos](#-videos-and-clips) · [Install](#-install) · [Using the app](#%EF%B8%8F-using-the-app) · [Command line](#-command-line) · [Settings](#%EF%B8%8F-settings) · [FAQ](#-faq) · [Troubleshooting](#-troubleshooting)
 
 <img src="docs/images/demo.gif" alt="Typing an artist into TuneGrab, ticking two albums into the queue, then pasting a YouTube link to download a clip" width="900">
 
-**Windows:** `irm https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/install.ps1 | iex` · [other ways](#-install)
-
 </div>
+
+## What it does
+
+- **Browse, then download.** Type an artist or paste a Spotify link, tick the albums or songs you want.
+- **Tagged files, sorted for you.** `Artist/Album (Year)/01 - Title.m4a`, with cover art and lyrics.
+- **Never twice.** It remembers what you have, and checks matches it wasn't sure about.
+- **Videos too.** Paste a YouTube link to save the video, a clip of it, or just the audio.
+
+Everything runs on your computer. Spotify is only read for track details; the audio comes
+from YouTube.
+
+## Get started (Windows)
+
+Open PowerShell and paste:
+
+```powershell
+irm https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/install.ps1 | iex
+```
+
+It installs what it needs, adds TuneGrab to the Start menu and opens it. Run the same line
+again to update. macOS, Linux and manual installs are under **Install** below.
+
+Then: **type an artist → tick what you want → Download.** That's it.
 
 ---
 
-## How it works
+Everything else is folded away below. Open what you need.
+
+<details>
+<summary><b>How it works</b></summary>
+
+<br>
 
 ```
  Spotify link or artist name
@@ -47,12 +67,15 @@ audio comes from YouTube. TuneGrab never touches Spotify's own audio streams.
 Paste a **YouTube (or other video) link** instead and TuneGrab saves the video as an MP4,
 just a clip of it, or only its audio.
 
----
+</details>
 
-## ✨ Features
+<details>
+<summary><b>Features in detail</b></summary>
 
-<details open>
-<summary><b>🔎 Browse before you download</b></summary>
+<br>
+
+<details>
+<summary><b>Browse before you download</b></summary>
 
 <br>
 
@@ -69,7 +92,7 @@ just a clip of it, or only its audio.
 </details>
 
 <details>
-<summary><b>🧺 One queue for everything</b></summary>
+<summary><b>One queue for everything</b></summary>
 
 <br>
 
@@ -83,7 +106,7 @@ just a clip of it, or only its audio.
 </details>
 
 <details>
-<summary><b>⬇️ Live downloads you can trust</b></summary>
+<summary><b>Live downloads you can trust</b></summary>
 
 <br>
 
@@ -103,7 +126,7 @@ just a clip of it, or only its audio.
 </details>
 
 <details>
-<summary><b>🏷️ Properly tagged files</b></summary>
+<summary><b>Properly tagged files</b></summary>
 
 <br>
 
@@ -118,7 +141,7 @@ just a clip of it, or only its audio.
 </details>
 
 <details>
-<summary><b>🎯 Smart matching</b></summary>
+<summary><b>Smart matching</b></summary>
 
 <br>
 
@@ -140,7 +163,7 @@ just a clip of it, or only its audio.
 </details>
 
 <details>
-<summary><b>📚 Library</b></summary>
+<summary><b>Library</b></summary>
 
 <br>
 
@@ -159,7 +182,7 @@ just a clip of it, or only its audio.
 </details>
 
 <details>
-<summary><b>🛡️ Private and safe by design</b></summary>
+<summary><b>Private and safe by design</b></summary>
 
 <br>
 
@@ -173,7 +196,7 @@ just a clip of it, or only its audio.
 </details>
 
 <details>
-<summary><b>⌨️ Keyboard friendly</b></summary>
+<summary><b>Keyboard friendly</b></summary>
 
 <br>
 
@@ -188,9 +211,12 @@ just a clip of it, or only its audio.
 
 </details>
 
----
+</details>
 
-## 🎬 Videos and clips
+<details>
+<summary><b>Videos and clips</b></summary>
+
+<br>
 
 Paste a **YouTube** link (or one from any
 [site yt-dlp supports](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md))
@@ -199,15 +225,18 @@ or just a **clip** between two times. Playlists download every video.
 
 <img src="docs/images/video.jpg" alt="A YouTube video in TuneGrab with Video (MP4), 1080p and a clip from 0:43 to 1:10 selected" width="900">
 
----
+</details>
 
-## 📦 Install
+<details>
+<summary><b>Install: macOS, Linux, manual, updating, uninstalling</b></summary>
+
+<br>
 
 TuneGrab needs three free tools: **uv** (runs Python for you), **ffmpeg** (audio conversion)
 and **Deno** (YouTube needs it).
 
-<details open>
-<summary><b>🪟 Windows (recommended: about 5 minutes)</b></summary>
+<details>
+<summary><b>Windows (recommended: about 5 minutes)</b></summary>
 
 <br>
 
@@ -236,7 +265,7 @@ Run the same line again to update. [Read the script](install.ps1) first if you l
 </details>
 
 <details>
-<summary><b>🍎 macOS</b></summary>
+<summary><b>macOS</b></summary>
 
 <br>
 
@@ -251,7 +280,7 @@ uv run --no-dev tunegrab serve      # opens http://127.0.0.1:8765 in your browse
 </details>
 
 <details>
-<summary><b>🐧 Linux</b></summary>
+<summary><b>Linux</b></summary>
 
 <br>
 
@@ -268,7 +297,7 @@ uv run --no-dev tunegrab serve
 </details>
 
 <details>
-<summary><b>✅ Check everything is ready</b></summary>
+<summary><b>Check everything is ready</b></summary>
 
 <br>
 
@@ -284,7 +313,7 @@ it's out of date), your music folder and any Spotify credentials, and says what 
 </details>
 
 <details>
-<summary><b>💻 Install the command globally (optional)</b></summary>
+<summary><b>Install the command globally (optional)</b></summary>
 
 <br>
 
@@ -299,7 +328,7 @@ Stop TuneGrab first if it's running (Windows locks the program file while it run
 </details>
 
 <details>
-<summary><b>🔄 Updating</b></summary>
+<summary><b>Updating</b></summary>
 
 <br>
 
@@ -315,7 +344,7 @@ or yt-dlp is out (checked once a day; **Settings → Updates** turns it off).
 </details>
 
 <details>
-<summary><b>🧹 Disk space and uninstalling</b></summary>
+<summary><b>Disk space and uninstalling</b></summary>
 
 <br>
 
@@ -338,13 +367,16 @@ those too if you want them gone. Your music folder is never touched.
 
 </details>
 
----
+</details>
 
-## 🖱️ Using the app
+<details>
+<summary><b>Using the app: step-by-step guides</b></summary>
+
+<br>
 
 <img src="docs/images/get-music.jpg" alt="The Get music start screen with a search box and example artists" width="900">
 
-<details open>
+<details>
 <summary><b>Download a few albums from an artist</b></summary>
 
 <br>
@@ -429,9 +461,12 @@ format, quality, lyrics and how many songs download at once are on the same scre
 
 </details>
 
----
+</details>
 
-## 💻 Command line
+<details>
+<summary><b>Command line</b></summary>
+
+<br>
 
 Everything in the app is also available from a terminal (prefix with `uv run` unless you
 installed it globally).
@@ -475,9 +510,12 @@ Global flags: `--version`, `-v/--verbose` (logs always go to a rotating file too
 
 </details>
 
----
+</details>
 
-## ⚙️ Settings
+<details>
+<summary><b>Settings</b></summary>
+
+<br>
 
 <details>
 <summary><b>Where settings come from</b></summary>
@@ -541,9 +579,12 @@ Full walkthrough: [`docs/SETUP.md`](docs/SETUP.md).
 
 </details>
 
----
+</details>
 
-## ❓ FAQ
+<details>
+<summary><b>FAQ</b></summary>
+
+<br>
 
 <details>
 <summary><b>Do I need a Spotify account or Premium?</b></summary>
@@ -551,7 +592,7 @@ Full walkthrough: [`docs/SETUP.md`](docs/SETUP.md).
 <br>
 
 No. Public links and artist names work with no account. Premium is only needed if you
-want to create your own Spotify developer app (see [Settings](#%EF%B8%8F-settings)).
+want to create your own Spotify developer app (see **Settings** above).
 
 </details>
 
@@ -659,9 +700,12 @@ discography across several artists in one go.
 
 </details>
 
----
+</details>
 
-## 🧰 Troubleshooting
+<details>
+<summary><b>Troubleshooting</b></summary>
+
+<br>
 
 <details>
 <summary><b>YouTube downloads suddenly all fail</b></summary>
@@ -748,7 +792,7 @@ uv run tunegrab fix <spotify-track-link> <youtube-link>    # force the right one
 <br>
 
 That's the limit of Spotify's public pages. Add Spotify developer credentials (see
-[Settings](#%EF%B8%8F-settings)) to get the full playlist.
+**Settings** above) to get the full playlist.
 
 </details>
 
@@ -762,9 +806,12 @@ also see details in the terminal.
 
 </details>
 
----
+</details>
 
-## 🛠️ For developers
+<details>
+<summary><b>For developers</b></summary>
+
+<br>
 
 <details>
 <summary><b>Project layout, tests and tooling</b></summary>
@@ -797,16 +844,18 @@ Changes per version: [`CHANGELOG.md`](CHANGELOG.md).
 
 </details>
 
+</details>
+
 ---
 
-## 📌 Project status
+## Project status
 
 TuneGrab is a personal project, shared as-is. I fix what breaks for my own use and push those
 fixes here, but I don't take feature requests or offer support. Forks are welcome.
 
 ---
 
-## 📄 License
+## License
 
 TuneGrab is free software under the [GNU General Public License v3.0 or later](LICENSE).
 You can use, change and share it; if you share a changed version, it must stay under the same licence.
