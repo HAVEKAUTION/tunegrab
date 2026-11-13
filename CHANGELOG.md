@@ -30,6 +30,9 @@ All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
 - **Update notice**: once a day TuneGrab asks GitHub and PyPI whether a newer TuneGrab or
   yt-dlp is out and shows a dismissible banner (Update yt-dlp is one click). Settings → Updates
   turns it off.
+- **Library shows the source quality.** Each song lists what YouTube served next to its format
+  ("MP3 · from Opus 129 kbps") and is marked "Low quality source" when YouTube only had a poor
+  version. Songs downloaded before this version show their format only.
 
 ### Fixed
 - **`tunegrab sync --remove` could offer to delete songs that hadn't left the playlist.**

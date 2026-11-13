@@ -980,3 +980,20 @@ def test_csv_playlist_sync_asks_for_the_new_file(client: TestClient) -> None:
     job = wait_for(client, body["job"]["id"], ("finished",))
     assert job["counts"]["done"] == 1 and job["counts"]["skipped"] == 1
     assert len(client.get("/api/library").json()["tracks"]) == 3  # nothing deleted
+
+
+def test_library_shows_what_youtube_served(client: TestClient, services: FakeServices) -> None:
+    poor = make_track(2)
+    assert poor.spotify_id is not None
+    services.downloader.low_quality.add(poor.spotify_id[-11:])  # the fake match's video ID
+    job = download_album(client)
+    by_title = {t["title"]: t for t in job["tasks"]}
+    assert by_title["Song 2"]["low_quality"] and "low quality" in by_title["Song 2"]["source"]
+    library = {t["title"]: t for t in client.get("/api/library").json()["tracks"]}
+    assert (library["Song 1"]["source"], library["Song 1"]["low_quality"]) == (
+        "Opus 129 kbps",
+        False,
+    )
+    # the label is the plain source; the flag carries "low quality"
+    assert (library["Song 2"]["source"], library["Song 2"]["low_quality"]) == ("AAC 96 kbps", True)
+    assert library["Song 2"]["format"] == "mp3"

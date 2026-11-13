@@ -1018,8 +1018,8 @@ function renderLibrary() {
       const cover = (list.find((t) => t.cover_url) || {}).cover_url;
       return `<div class="lib-album"><div class="cover">${cover ? `<img src="${esc(cover)}" alt="" loading="lazy">` : icon("music")}</div><div><h4>${esc(album)}</h4><table><tbody>${list.map((t) => `<tr>
         <td class="c-num tnum">${t.track_number || ""}</td>
-        <td><span class="t-title">${esc(t.title)}</span>${t.exists ? "" : ` <span class="pill warn">Missing file</span>`}<div class="t-sub">${esc(t.artists.join(", "))}</div>${reviewHtml(t)}</td>
-        <td class="xs faint">${esc((t.format || "").toUpperCase())}</td><td class="c-time tnum">${fmtTime(t.duration_s)}</td>
+        <td><span class="t-title">${esc(t.title)}</span>${t.exists ? "" : ` <span class="pill warn">Missing file</span>`}${t.low_quality ? ` <span class="pill warn" title="YouTube only had a low-quality version of this song">${icon("alert")}Low quality source</span>` : ""}<div class="t-sub">${esc(t.artists.join(", "))}</div>${reviewHtml(t)}</td>
+        <td class="xs faint"${t.source ? ` title="What YouTube served, before TuneGrab saved it as ${esc((t.format || "audio").toUpperCase())}"` : ""}>${esc((t.format || "").toUpperCase())}${t.source ? ` · from ${esc(t.source)}` : ""}</td><td class="c-time tnum">${fmtTime(t.duration_s)}</td>
         <td class="c-end">${t.exists ? `<button class="btn ghost sm" data-show="${esc(t.path)}" aria-label="Show ${esc(t.title)} in folder">${icon("folder")}Show</button>` : ""}</td></tr>`).join("")}
         </tbody></table></div></div>`;
     }).join("")}</section>`;

@@ -301,6 +301,7 @@ class FakeDownloader:
         self.rate_limited_times = rate_limited_times
         self.downloaded: list[str] = []
         self.content: dict[str, bytes] = {}  # video ID -> the bytes of its file
+        self.low_quality: set[str] = set()  # video IDs YouTube only has in format 18
         self.calls = 0
         self.block = block
         self.started = started
@@ -338,7 +339,9 @@ class FakeDownloader:
             progress(0.5, "downloading")
             progress(1.0, "converting")
         out.write_bytes(self.content.get(video_id, b"audio"))
-        if source is not None:
+        if source is not None and video_id in self.low_quality:
+            source(SourceInfo(format_id="18", codec="mp4a.40.2", bitrate_kbps=96))
+        elif source is not None:
             source(SourceInfo(format_id="251", codec="opus", bitrate_kbps=129))
         with self.lock:
             self.downloaded.append(video_id)
