@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -6,16 +7,23 @@ from tunegrab.config import (
     Settings,
     coerce_setting,
     config_file,
+    keep_earlier_defaults,
+    pin_music_folder,
     read_config_file,
     write_config_file,
 )
 
 
+@pytest.fixture(autouse=True)
+def real_format_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TUNEGRAB_FORMAT")  # conftest sets MP3 for the rest of the suite
+
+
 def test_defaults() -> None:
     s = Settings(_env_file=None)
     assert (s.format, s.bitrate, s.threads, s.playlist_mode, s.lyrics) == (
-        "mp3",
-        320,
+        "m4a",
+        None,
         4,
         "m3u",
         True,
@@ -85,3 +93,126 @@ def test_config_file_roundtrip() -> None:
     s = Settings(_env_file=None)
     assert (s.format, s.threads, s.lyrics, s.match_threshold) == ("m4a", 3, False, 75.5)
     assert s.output_dir == Path("C:\\Music\\Lib")
+
+
+def test_unreadable_config_file_is_set_aside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tunegrab import config
+
+    monkeypatch.setenv("TUNEGRAB_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "startup_warnings", [])
+    (tmp_path / "config.toml").write_text('format = "opus\nthreads = = 2\n', encoding="utf-8")
+    settings = Settings(_env_file=None)
+    assert settings.format == "m4a"  # defaults
+    kept = list(tmp_path.glob("config.toml.broken-*"))
+    assert len(kept) == 1 and "threads = = 2" in kept[0].read_text(encoding="utf-8")
+    assert not (tmp_path / "config.toml").exists()
+    assert len(config.startup_warnings) == 1 and str(kept[0]) in config.startup_warnings[0]
+
+
+# --- music folder default (C1) ------------------------------------------------------------
+def test_fresh_profile_uses_music_folder_in_home(tmp_path: Path) -> None:
+    settings = pin_music_folder(Settings(_env_file=None))
+    assert settings.resolved_output_dir == (Path.home() / "Music" / "TuneGrab").resolve()
+    assert read_config_file() == {}  # nothing pinned for a fresh install
+
+
+def test_saved_folder_is_kept(tmp_path: Path) -> None:
+    chosen = tmp_path / "My Music"
+    write_config_file({"output_dir": str(chosen)})
+    settings = pin_music_folder(Settings(_env_file=None))
+    assert settings.resolved_output_dir == chosen.resolve()
+    assert read_config_file() == {"output_dir": str(chosen)}
+
+
+def test_upgrade_with_history_pins_the_old_downloads_folder(tmp_path: Path) -> None:
+    from tests.fakes import make_track
+    from tunegrab.library.archive import Archive
+
+    old = Settings(_env_file=None, output_dir=tmp_path / "downloads")
+    with Archive(old.resolved_archive_path) as archive:
+        archive.record_download(make_track(1), tmp_path / "downloads" / "a.mp3", "x", "mp3")
+    settings = pin_music_folder(Settings(_env_file=None))  # cwd is tmp_path (conftest)
+    expected = (tmp_path / "downloads").resolve()
+    assert settings.resolved_output_dir == expected
+    assert read_config_file() == {"output_dir": str(expected)}
+    # and it never changes again, wherever TuneGrab is started from
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    os.chdir(elsewhere)
+    assert pin_music_folder(Settings(_env_file=None)).resolved_output_dir == expected
+
+
+def test_upgrade_without_history_but_with_music_pins_too(tmp_path: Path) -> None:
+    (tmp_path / "downloads" / "Artist").mkdir(parents=True)
+    settings = pin_music_folder(Settings(_env_file=None))
+    assert settings.resolved_output_dir == (tmp_path / "downloads").resolve()
+
+
+def test_relative_saved_folder_is_made_absolute_once(tmp_path: Path) -> None:
+    write_config_file({"output_dir": "songs", "threads": 2})
+    settings = pin_music_folder(Settings(_env_file=None))
+    expected = (tmp_path / "songs").resolve()
+    assert settings.resolved_output_dir == expected
+    assert read_config_file() == {"output_dir": str(expected), "threads": 2}
+
+
+def test_relative_folder_never_depends_on_the_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TUNEGRAB_OUTPUT_DIR", "Tunes")
+    settings = pin_music_folder(Settings(_env_file=None))
+    assert settings.resolved_output_dir == (Path.home() / "Tunes").resolve()
+    assert read_config_file() == {}  # an environment choice isn't written anywhere
+
+
+# --- format default (C10) ---------------------------------------------------------------
+def _marker() -> Path:
+    from tunegrab.config import DEFAULTS_MARKER, data_dir
+
+    return data_dir() / DEFAULTS_MARKER
+
+
+def test_fresh_profile_gets_m4a_and_keeps_it() -> None:
+    settings = keep_earlier_defaults(Settings(_env_file=None))
+    assert settings.format == "m4a" and settings.bitrate is None
+    assert "format" not in read_config_file() and _marker().read_text() == "2"
+    write_config_file({"threads": 2})  # later, the user saves something in Settings
+    assert keep_earlier_defaults(Settings(_env_file=None)).format == "m4a"
+
+
+def test_profile_with_saved_settings_keeps_mp3() -> None:
+    music = "D:/Music" if os.name == "nt" else "/srv/Music"  # an absolute path on this OS
+    write_config_file({"output_dir": music, "threads": 6})  # saved by 0.4.x
+    settings = keep_earlier_defaults(Settings(_env_file=None))
+    assert settings.format == "mp3"
+    assert read_config_file() == {"output_dir": music, "threads": 6, "format": "mp3"}
+    write_config_file({**read_config_file(), "format": "m4a"})  # they switch later
+    assert keep_earlier_defaults(Settings(_env_file=None)).format == "m4a"
+
+
+def test_profile_with_download_history_keeps_mp3(tmp_path: Path) -> None:
+    from tests.fakes import make_track
+    from tunegrab.library.archive import Archive
+
+    settings = Settings(_env_file=None)
+    with Archive(settings.resolved_archive_path) as archive:
+        archive.record_download(make_track(1), tmp_path / "a.mp3", "x", "mp3")
+    assert keep_earlier_defaults(settings).format == "mp3"
+    assert read_config_file()["format"] == "mp3"
+
+
+def test_a_chosen_format_is_never_changed() -> None:
+    write_config_file({"format": "opus"})
+    assert keep_earlier_defaults(Settings(_env_file=None)).format == "opus"
+    assert read_config_file() == {"format": "opus"} and _marker().exists()
+
+
+def test_dotenv_comes_only_from_tunegrab_folders() -> None:
+    from tunegrab import config
+
+    files = config.ENV_FILES
+    assert Path(".env") not in files and ".env" not in files  # not the current folder
+    assert files[-1] == config.INSTALL_DIR / ".env"
+    assert (config.INSTALL_DIR / "pyproject.toml").exists()  # really the install folder

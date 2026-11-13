@@ -109,7 +109,7 @@ def test_cookies_option(tmp_path: Path) -> None:
 
 def test_finds_file_when_not_reported(tmp_path: Path) -> None:
     FakeYDL.behaviour["report_path"] = False
-    assert YtDlpDownloader().download("vid12345678", tmp_path).name == "vid12345678.mp3"
+    assert YtDlpDownloader("mp3").download("vid12345678", tmp_path).name == "vid12345678.mp3"
 
 
 def test_missing_output(tmp_path: Path) -> None:
@@ -120,7 +120,7 @@ def test_missing_output(tmp_path: Path) -> None:
 def test_errors_are_wrapped(tmp_path: Path) -> None:
     FakeYDL.behaviour["error"] = RuntimeError("\x1b[0;31mERROR:\x1b[0m Video unavailable")
     with pytest.raises(DownloadError, match=r"^Video unavailable$") as caught:
-        YtDlpDownloader().download("vid12345678", tmp_path)
+        YtDlpDownloader("mp3").download("vid12345678", tmp_path)
     assert caught.value.kind == "unavailable"
     assert len(FakeYDL.behaviour["clients"]) == 1  # no point trying other clients
 
@@ -128,7 +128,7 @@ def test_errors_are_wrapped(tmp_path: Path) -> None:
 def test_blocked_tries_other_clients(tmp_path: Path) -> None:
     FakeYDL.behaviour["errors"] = [RuntimeError("ERROR: HTTP Error 403: Forbidden")]
     seen: list[SourceInfo] = []
-    path = YtDlpDownloader().download("vid12345678", tmp_path, source=seen.append)
+    path = YtDlpDownloader("mp3").download("vid12345678", tmp_path, source=seen.append)
     assert path.exists()
     assert FakeYDL.behaviour["clients"] == [None, ["default", "-web_embedded"]]
     assert seen[0].client == "default,-web_embedded"
@@ -144,7 +144,7 @@ def test_low_quality_tries_other_clients(tmp_path: Path) -> None:
         {"format_id": "251", "acodec": "opus", "abr": 129.4},
     ]
     seen: list[SourceInfo] = []
-    YtDlpDownloader().download("vid12345678", tmp_path, source=seen.append)
+    YtDlpDownloader("mp3").download("vid12345678", tmp_path, source=seen.append)
     assert len(FakeYDL.behaviour["clients"]) == 2
     assert seen[0].label == "Opus 129 kbps" and not seen[0].low_quality
 
@@ -152,7 +152,7 @@ def test_low_quality_tries_other_clients(tmp_path: Path) -> None:
 def test_genuinely_low_quality_video_is_accepted_at_once(tmp_path: Path) -> None:
     FakeYDL.behaviour["formats"] = [{"format_id": "18", "acodec": "mp4a.40.2", "abr": 96}]
     seen: list[SourceInfo] = []
-    YtDlpDownloader().download("vid12345678", tmp_path, source=seen.append)
+    YtDlpDownloader("mp3").download("vid12345678", tmp_path, source=seen.append)
     assert len(FakeYDL.behaviour["clients"]) == 1  # no "formats missing" warning
     assert seen[0].low_quality and not seen[0].worth_retrying
 
@@ -174,7 +174,7 @@ def test_low_quality_kept_when_later_client_errors(tmp_path: Path) -> None:
     original = yt_dlp.YoutubeDL
     yt_dlp.YoutubeDL = Failing  # type: ignore[misc]
     try:
-        path = YtDlpDownloader().download("vid12345678", tmp_path, source=seen.append)
+        path = YtDlpDownloader("mp3").download("vid12345678", tmp_path, source=seen.append)
     finally:
         yt_dlp.YoutubeDL = original  # type: ignore[misc]
     assert path.exists() and seen[0].format_id == "18"
@@ -184,7 +184,7 @@ def test_low_quality_kept_when_nothing_better(tmp_path: Path) -> None:
     FakeYDL.behaviour["warnings"] = [DEGRADED]
     FakeYDL.behaviour["formats"] = [{"format_id": "18", "acodec": "mp4a.40.2", "abr": 96}] * 3
     seen: list[SourceInfo] = []
-    YtDlpDownloader().download("vid12345678", tmp_path, source=seen.append)
+    YtDlpDownloader("mp3").download("vid12345678", tmp_path, source=seen.append)
     assert len(FakeYDL.behaviour["clients"]) == len(CLIENT_LADDER)
     assert seen[0].low_quality and seen[0].label == "AAC 96 kbps (low quality source)"
 
@@ -192,7 +192,7 @@ def test_low_quality_kept_when_nothing_better(tmp_path: Path) -> None:
 def test_rate_limit_is_not_retried_with_other_clients(tmp_path: Path) -> None:
     FakeYDL.behaviour["error"] = RuntimeError("ERROR: HTTP Error 429: Too Many Requests")
     with pytest.raises(DownloadError) as caught:
-        YtDlpDownloader().download("vid12345678", tmp_path)
+        YtDlpDownloader("mp3").download("vid12345678", tmp_path)
     assert caught.value.kind == "rate_limited"
     assert len(FakeYDL.behaviour["clients"]) == 1
 
@@ -240,8 +240,105 @@ def test_cancel(tmp_path: Path) -> None:
     cancel = threading.Event()
     cancel.set()
     with pytest.raises(DownloadCancelled):
-        YtDlpDownloader().download("vid12345678", tmp_path, cancel=cancel)
+        YtDlpDownloader("mp3").download("vid12345678", tmp_path, cancel=cancel)
 
 
 def test_clean_error() -> None:
     assert clean_error("\x1b[31mERROR: boom\x1b[0m ") == "boom"
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (DownloadError("HTTP Error 403: Forbidden"), "update yt-dlp in Settings"),
+        (DownloadError("n challenge solving failed"), "update yt-dlp in Settings"),
+        (DownloadError("Video unavailable"), "Video unavailable"),
+        (DownloadError("HTTP Error 429: Too Many Requests"), "Too Many Requests"),
+        (DownloadError("network hiccup"), "network hiccup"),
+        (OSError("boom"), "boom"),
+    ],
+)
+def test_describe_failure_names_the_fix_only_for_breakage(
+    error: BaseException, expected: str
+) -> None:
+    from tunegrab.download.ytdlp import describe_failure
+
+    text = describe_failure(error)
+    assert expected in text
+    assert ("update yt-dlp" in text) == (expected == "update yt-dlp in Settings")
+
+
+def test_describe_failure_looks_through_wrapping() -> None:
+    from tunegrab.download.ytdlp import describe_failure
+
+    try:
+        try:
+            raise DownloadError("HTTP Error 403: Forbidden")
+        except DownloadError as inner:
+            raise RuntimeError("HTTP Error 403: Forbidden") from inner
+    except RuntimeError as outer:
+        assert "update yt-dlp" in describe_failure(outer)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Sign in to confirm your age. This video may be inappropriate for some users.",
+        "This video is age-restricted",
+    ],
+)
+def test_age_restricted_failures_point_to_youtube_sign_in(message: str) -> None:
+    from tunegrab.download.ytdlp import AGE_HINT, describe_failure
+
+    assert describe_failure(DownloadError(message)) == AGE_HINT
+    assert "YouTube sign-in in Settings" in AGE_HINT
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Could not copy Chrome cookie database. See https://github.com/yt-dlp/yt-dlp/issues/7271",
+        "Failed to decrypt with DPAPI",
+        "could not find firefox cookies database in C:/x",
+    ],
+)
+def test_unreadable_browser_cookies_say_what_to_do(message: str) -> None:
+    from tunegrab.download.ytdlp import COOKIES_HINT, describe_failure
+
+    text = describe_failure(DownloadError(message))
+    assert text.startswith(COOKIES_HINT) and message in text
+
+
+def test_mp3_is_v0_unless_a_bitrate_was_chosen() -> None:
+    [auto] = postprocessors("mp3", None)
+    assert auto["preferredquality"] == "0"  # yt-dlp: under 10 = VBR quality; 0 = LAME V0
+    assert postprocessors("mp3", 192)[0]["preferredquality"] == "192"
+    assert YtDlpDownloader().fmt == "m4a" and YtDlpDownloader().bitrate is None
+
+
+def _picked(fmt: str, formats: list[dict[str, Any]]) -> list[str]:
+    from yt_dlp.YoutubeDL import YoutubeDL  # the real one (other tests swap in a fake)
+
+    ydl = YoutubeDL({"quiet": True})
+    info: dict[str, Any] = {"formats": [dict(f) for f in formats], "extractor": "youtube"}
+    ydl.sort_formats(info)  # type: ignore[attr-defined]
+    select = ydl.build_format_selector(format_selector(fmt))  # type: ignore[arg-type]
+    ctx = {"formats": info["formats"], "has_merged_format": False, "incomplete_formats": False}
+    return [f["format_id"] for f in select(ctx)]
+
+
+def test_premium_formats_are_picked_when_offered() -> None:
+    def audio(fid: str, ext: str, acodec: str, abr: int) -> dict[str, Any]:
+        return {"format_id": fid, "ext": ext, "acodec": acodec, "vcodec": "none", "abr": abr,
+                "url": "https://x", "protocol": "https"}  # fmt: skip
+
+    free = [
+        audio("139", "m4a", "mp4a.40.5", 48),
+        audio("140", "m4a", "mp4a.40.2", 129),
+        audio("140-drc", "m4a", "mp4a.40.2", 129),
+        audio("251", "webm", "opus", 135),
+    ]
+    premium = [*free, audio("141", "m4a", "mp4a.40.2", 256), audio("774", "webm", "opus", 256)]
+    assert (_picked("m4a", free), _picked("m4a", premium)) == (["140"], ["141"])
+    assert (_picked("opus", free), _picked("opus", premium)) == (["251"], ["774"])
+    assert _picked("mp3", premium) == ["774"]

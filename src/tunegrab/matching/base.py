@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from tunegrab.errors import TuneGrabError
 from tunegrab.models import Candidate, Track
 
 
-class SearchError(Exception):
+class SearchError(TuneGrabError):
     """An audio provider's search failed (network, parse error, ...)."""
 
 

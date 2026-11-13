@@ -30,15 +30,20 @@ from tunegrab.config import (
     VideoQuality,
     coerce_setting,
     config_file,
+    keep_earlier_defaults,
     keyring_set,
     read_config_file,
+    startup_warnings,
     write_config_file,
 )
 from tunegrab.doctor import CheckResult, Status, run_all, update_ytdlp
 from tunegrab.download.convert import FORMAT_HELP
-from tunegrab.download.ytdlp import DownloadError
+from tunegrab.download.ytdlp import BREAKAGE_HINT, DownloadError
+from tunegrab.errors import TuneGrabError
 from tunegrab.imports import CsvImportError, collection_from_csv
-from tunegrab.library.paths import TemplateError, validate_template
+from tunegrab.library import sync as playlist_sync
+from tunegrab.library.archive import DownloadRecord
+from tunegrab.library.paths import TemplateError, move_into_place, validate_template
 from tunegrab.library.playlists import playlist_file
 from tunegrab.logs import setup_logging
 from tunegrab.matching.base import SearchError
@@ -46,6 +51,7 @@ from tunegrab.matching.ytmusic import track_from_candidate
 from tunegrab.metadata.base import MetadataError
 from tunegrab.models import Candidate, Collection, Job, Match, TaskStatus, Track, TrackTask
 from tunegrab.pipeline import Pipeline, run_job_sync
+from tunegrab.preflight import JobAborted
 from tunegrab.services import Services, build_services
 from tunegrab.ui import (
     LiveProgress,
@@ -90,7 +96,9 @@ _STATUS_STYLE: dict[Status, tuple[str, str]] = {
 # --- shared options ---------------------------------------------------------------------
 
 FormatOpt = Annotated[AudioFormat | None, typer.Option("--format", "-f", help=FORMAT_HELP)]
-BitrateOpt = Annotated[int | None, typer.Option("--bitrate", "-b", help="kbps (mp3 only).")]
+BitrateOpt = Annotated[
+    int | None, typer.Option("--bitrate", "-b", help="Constant kbps for mp3 (default: VBR V0).")
+]
 OutOpt = Annotated[Path | None, typer.Option("--out", "-o", help="Output (library) folder.")]
 ThreadsOpt = Annotated[int | None, typer.Option("--threads", "-t", help="Parallel downloads.")]
 LyricsOpt = Annotated[bool | None, typer.Option("--lyrics/--no-lyrics", help="Embed lyrics.")]
@@ -105,15 +113,37 @@ PlaylistModeOpt = Annotated[
 ]
 
 
+def cli_hint(message: str) -> str:
+    """The command-line next step for a shared (app-voiced) error message, if any."""
+    lowered = message.lower()
+    if "spotify login" in lowered:
+        return "Log in with: tunegrab login"
+    if "no match above" in lowered:
+        return "Choose a YouTube video for it with: tunegrab fix"
+    if "spotify developer credentials" in lowered or "spotify_client" in lowered:
+        return "Setup steps: docs/SETUP.md"
+    if "update yt-dlp in settings" in lowered:
+        return "Update it with: tunegrab doctor --update"
+    if "under youtube sign-in in settings" in lowered:
+        return "Sign in with: tunegrab config set cookies_from_browser firefox"
+    return ""
+
+
 def _fail(message: str, code: int = 1) -> typer.Exit:
     console.print(f"[red]Error:[/] {escape(message)}")
+    hint = cli_hint(message)
+    if hint:
+        console.print(f"[dim]{escape(hint)}[/]")
     return typer.Exit(code)
 
 
 def load_settings(**overrides: Any) -> Settings:
     values = {k: v for k, v in overrides.items() if v is not None}
+    for key in ("output_dir", "video_dir"):  # a folder typed in a shell is relative to it
+        if key in values:
+            values[key] = Path(values[key]).expanduser().resolve()
     try:
-        settings = Settings(**values)
+        settings = keep_earlier_defaults(Settings(**values))
         validate_template(settings.track_template)
         validate_template(settings.playlist_template)
     except TemplateError as exc:
@@ -125,7 +155,10 @@ def load_settings(**overrides: Any) -> Settings:
 
 @contextmanager
 def services_for(settings: Settings) -> Iterator[Services]:
-    services = build_services(settings)
+    try:
+        services = build_services(settings)
+    except TuneGrabError as exc:  # e.g. a download history from a newer TuneGrab
+        raise _fail(str(exc)) from exc
     try:
         yield services
     finally:
@@ -140,6 +173,7 @@ def _version_callback(value: bool) -> None:
 
 @app.callback()
 def main(
+    ctx: typer.Context,
     version: Annotated[
         bool,
         typer.Option(
@@ -157,6 +191,13 @@ def main(
     """TuneGrab: Spotify metadata -> YouTube audio -> tagged local files."""
     ensure_utf8_output()
     setup_logging(verbose)
+    ctx.call_on_close(_print_startup_warnings)
+
+
+def _print_startup_warnings() -> None:
+    for warning in startup_warnings:
+        console.print(f"[yellow]Note:[/] {escape(warning)}")
+    startup_warnings.clear()
 
 
 # --- running jobs ---------------------------------------------------------------------
@@ -187,6 +228,8 @@ def run_jobs(services: Services, builders: list[tuple[str, Any]]) -> list[Job]:
                         job = pipeline.build_job(item)
                 except (MetadataError, InvalidURLError, LookupError, ValueError) as exc:
                     console.print(f"[red]Could not resolve[/] {escape(label)}: {escape(str(exc))}")
+                    if hint := cli_hint(str(exc)):
+                        console.print(f"[dim]{escape(hint)}[/]")
                     continue
             _print_warnings(job.collection)
             if not job.tasks:
@@ -199,8 +242,18 @@ def run_jobs(services: Services, builders: list[tuple[str, Any]]) -> list[Job]:
     with display:
         for job in jobs:
             display.start_job(job)
+            if job.format and job.format != pipeline.settings.format:  # e.g. a retry
+                pipeline = services.pipeline(
+                    on_event=display.on_event,
+                    settings=services.settings.model_copy(update={"format": job.format}),
+                )
             try:
                 run_job_sync(pipeline, job)
+            except JobAborted as exc:
+                job.error = str(exc)
+                console.print(f"[red]Error:[/] {escape(str(exc))}")
+                finished.append(job)
+                break
             except KeyboardInterrupt:
                 interrupted = True
                 pipeline.cancel()
@@ -223,6 +276,23 @@ def run_jobs(services: Services, builders: list[tuple[str, Any]]) -> list[Job]:
         if failed is not None:
             console.print(failed)
             console.print("Run [bold]tunegrab retry[/] to try failed tracks again.")
+            if any(
+                t.status == TaskStatus.FAILED and "no match above" in (t.error or "")
+                for job in finished
+                for t in job.tasks
+            ):
+                console.print(
+                    "Choose a YouTube video for unmatched songs with [bold]tunegrab fix[/]."
+                )
+            if any(
+                t.status == TaskStatus.FAILED and BREAKAGE_HINT in (t.error or "")
+                for job in finished
+                for t in job.tasks
+            ):
+                console.print(
+                    "YouTube refused some downloads; this usually means yt-dlp needs an "
+                    "update: [bold]tunegrab doctor --update[/]"
+                )
         for job in finished:
             collection = job.collection
             if (
@@ -387,11 +457,15 @@ def video(
     )
     job, entries = build_job(found, options)
     display = LiveProgress(console)
-    pipeline = VideoPipeline(settings, options, entries, on_event=display.on_event)
-    with display:
+    with services_for(settings) as services, display:
+        pipeline = VideoPipeline(
+            settings, options, entries, on_event=display.on_event, archive=services.archive
+        )
         display.start_job(job)
         try:
             asyncio.run(pipeline.run(job))
+        except JobAborted as exc:
+            raise _fail(str(exc)) from exc
         except KeyboardInterrupt:
             pipeline.cancel()
             console.print("[yellow]Interrupted.[/]")
@@ -560,12 +634,8 @@ def sync(
         if ref.kind not in ("playlist", "liked"):
             raise _fail("sync works with playlists (or Liked Songs).")
         playlist_id = ref.id or "liked"
-        before = {t.key: t for _, t in services.archive.playlist_members(playlist_id)}
-        # tracks that left on an earlier sync but weren't deleted then (no --remove)
-        pending_key = f"sync_gone:{playlist_id}"
-        for raw in services.archive.get_meta(pending_key) or []:
-            track = Track.model_validate(raw)
-            before.setdefault(track.key, track)
+        # includes tracks that left on an earlier sync but weren't deleted then (no --remove)
+        before = playlist_sync.remembered(services.archive, playlist_id)
         try:
             with console.status("Fetching playlist ..."):
                 collection = services.resolver.resolve_ref(ref)
@@ -579,38 +649,40 @@ def sync(
             tasks=[TrackTask(track=t, position=i) for i, t in enumerate(collection.tracks, 1)],
         )
         jobs = run_jobs(services, [(collection.name, job)])
-        current = {t.key for t in collection.tracks}
-        gone = [t for key, t in before.items() if key not in current]
-        services.archive.set_meta(pending_key, [t.model_dump(mode="json") for t in gone] or None)
+        if not playlist_sync.is_complete(collection):
+            console.print(
+                f"[yellow]Only {len(collection.tracks)} of {collection.total} tracks could be "
+                "read, so TuneGrab can't tell which ones left the playlist.[/] Nothing was "
+                "removed. Log in (tunegrab login) to read the whole playlist."
+            )
+            raise typer.Exit(_exit_code(jobs))
+        gone = playlist_sync.note_departures(services.archive, playlist_id, before, collection)
         if not gone:
             console.print("No tracks have left the playlist.")
             raise typer.Exit(_exit_code(jobs))
         console.print(f"[yellow]{len(gone)} track(s) are no longer in the playlist:[/]")
-        keep_keys = services.archive.keys_in_other_playlists(playlist_id)
-        deletable: list[tuple[Path, str]] = []
-        for track in gone:
-            record = services.archive.get_download(track.key)
-            if record is None or not record.exists:
-                console.print(f"  {escape(track.display)} [dim](not downloaded)[/]")
-                continue
-            if track.key in keep_keys:
-                console.print(f"  {escape(track.display)} [dim](kept: in another playlist)[/]")
-                continue
-            console.print(f"  {escape(track.display)} -> {escape(str(record.path))}")
-            deletable.append((record.path, track.key))
+        deletable = 0
+        for item in playlist_sync.describe(services.archive, playlist_id, gone):
+            name = escape(item.track.display)
+            if item.state == "not_downloaded":
+                console.print(f"  {name} [dim](not downloaded)[/]")
+            elif item.state == "shared":
+                console.print(f"  {name} [dim](kept: in another playlist)[/]")
+            else:
+                console.print(f"  {name} -> {escape(str(item.path))}")
+                deletable += 1
         if not remove:
             if deletable:
                 console.print("Re-run with [bold]--remove[/] to delete these files.")
             raise typer.Exit(_exit_code(jobs))
-        if deletable and (yes or typer.confirm(f"Delete {len(deletable)} file(s)?", default=False)):
-            for path, key in deletable:
-                path.unlink(missing_ok=True)
-                path.with_suffix(".lrc").unlink(missing_ok=True)
-                services.archive.forget_download(key)
-            deleted = {key for _, key in deletable}
-            left = [t.model_dump(mode="json") for t in gone if t.key not in deleted]
-            services.archive.set_meta(pending_key, left or None)
-            console.print(f"Deleted {len(deletable)} file(s).")
+        if deletable and (yes or typer.confirm(f"Delete {deletable} file(s)?", default=False)):
+            result = playlist_sync.remove_files(services.archive, playlist_id)
+            for item, why in result.failed:
+                console.print(f"[red]Couldn't delete[/] {escape(str(item.path))}: {why}")
+            console.print(f"Deleted {len(result.deleted)} of {deletable} file(s).")
+            if result.failed:
+                console.print("Close any program using the others and run sync again.")
+                raise typer.Exit(1)
             if settings.playlist_mode == "m3u":
                 pipeline.write_playlist_file(playlist_id)
     raise typer.Exit(_exit_code(jobs))
@@ -634,11 +706,11 @@ def retry(
         if not failures:
             console.print("No failed tracks to retry.")
             return
-        groups: dict[str, list[Any]] = {}
+        groups: dict[tuple[str, str | None], list[Any]] = {}
         for failure in failures:
-            groups.setdefault(failure.job_input, []).append(failure)
+            groups.setdefault((failure.job_input, failure.format), []).append(failure)
         jobs_in: list[tuple[str, Any]] = []
-        for job_input, items in groups.items():
+        for (job_input, fmt), items in groups.items():
             first = items[0]
             collection = Collection(
                 kind=first.collection_kind or "track",
@@ -649,7 +721,10 @@ def retry(
             )
             tasks = [TrackTask(track=f.track, position=f.position or 0) for f in items]
             jobs_in.append(
-                (collection.name, Job(input=job_input, collection=collection, tasks=tasks))
+                (
+                    collection.name,
+                    Job(input=job_input, collection=collection, tasks=tasks, format=fmt),
+                )
             )
         console.print(f"Retrying {len(failures)} track(s) ...")
         jobs = run_jobs(services, jobs_in)
@@ -699,24 +774,79 @@ def fix(
         console.print(
             f"Saved: {escape(track.display)} -> {candidate.url} ([dim]{escape(candidate.title)}[/])"
         )
-        record = services.archive.get_download(track.key)
-        if record is not None and record.exists:
-            if yes or typer.confirm(f"Replace the existing file {record.path}?", default=True):
-                record.path.unlink(missing_ok=True)
-                record.path.with_suffix(".lrc").unlink(missing_ok=True)
-                services.archive.forget_download(track.key)
-            else:
-                download_now = False
         if not download_now:
             return
+        record = services.archive.get_download(track.key)
+        if record is not None and not record.exists:
+            record = None
+        if record is not None and not (
+            yes or typer.confirm(f"Replace the existing file {record.path}?", default=True)
+        ):
+            return
+        # Keep the old file aside until the new one is safely in place.
+        old = _set_aside_for_replacement(record) if record is not None else None
+        if old is not None:
+            services.archive.forget_download(track.key)
         selected = Match(track=track, candidate=candidate, score=100.0, reason="manual override")
         job = Job(
             input=spotify_url,
             collection=Collection(kind="track", id=ref.id, name=track.display, tracks=[track]),
             tasks=[TrackTask(track=track, position=1, match=selected)],
         )
-        jobs = run_jobs(services, [(track.display, job)])
+        try:
+            jobs = run_jobs(services, [(track.display, job)])
+        finally:
+            if old is not None and record is not None:
+                _finish_replacement(services, record, old, job.tasks[0].status)
     raise typer.Exit(_exit_code(jobs))
+
+
+def _set_aside_for_replacement(record: DownloadRecord) -> list[tuple[Path, Path]]:
+    """Rename the old song (and its .lrc) to a hidden backup name; returns the moves."""
+    moves: list[tuple[Path, Path]] = []
+    for path in (record.path, record.path.with_suffix(".lrc")):
+        if not path.exists():
+            continue
+        backup = path.with_name(f".{path.name}.tunegrab-old")
+        try:
+            path.replace(backup)
+        except OSError as exc:
+            for original, moved in moves:  # put back what was already moved
+                moved.replace(original)
+            raise _fail(
+                f"Couldn't replace {path}: {exc.strerror or exc}. If it's open in a player, "
+                "close it and try again."
+            ) from exc
+        moves.append((path, backup))
+    return moves
+
+
+def _finish_replacement(
+    services: Services, record: DownloadRecord, moves: list[tuple[Path, Path]], status: TaskStatus
+) -> None:
+    """Delete the backup after a successful replacement, or restore it after a failure."""
+    if status == TaskStatus.DONE:
+        for _original, backup in moves:
+            try:
+                backup.unlink(missing_ok=True)
+            except OSError as exc:
+                console.print(f"[yellow]Note:[/] couldn't remove {escape(str(backup))}: {exc}")
+        return
+    for original, backup in moves:
+        try:
+            move_into_place(backup, original)
+        except OSError as exc:
+            console.print(f"[red]Your old file is at {escape(str(backup))}[/] ({exc}).")
+    services.archive.record_download(
+        record.track,
+        record.path,
+        record.video_id,
+        record.format,
+        review=record.review,
+        source=record.source,
+        low_quality=record.low_quality,
+    )
+    console.print("The new version wasn't downloaded; your old file is back in place.")
 
 
 @app.command()
@@ -759,7 +889,7 @@ def status() -> None:
 def login() -> None:
     """Log in to Spotify (PKCE) for private playlists and Liked Songs."""
     from tunegrab.metadata.spotify_api import login as spotify_login
-    from tunegrab.net import get_client
+    from tunegrab.net import NetworkError, get_client
 
     settings = load_settings()
     try:
@@ -770,6 +900,8 @@ def login() -> None:
                 f"Opening your browser to log in. If nothing happens, open:\n{u}"
             ),
         )
+    except NetworkError as exc:
+        raise _fail(f"Couldn't reach Spotify: {exc}. Check your connection and try again.") from exc
     except (MetadataError, RuntimeError, OSError) as exc:
         raise _fail(str(exc)) from exc
     console.print("[green]Logged in.[/] Private playlists and Liked Songs are now available.")
@@ -903,7 +1035,10 @@ def serve(
             return
         raise _fail(f"Port {port} is already used by another program. Try --port {port + 1}.")
     settings = load_settings()
-    web_app = create_app(settings, allowed_hosts={host.lower()})
+    try:
+        web_app = create_app(settings, allowed_hosts={host.lower()})
+    except TuneGrabError as exc:
+        raise _fail(str(exc)) from exc
     console.print(f"TuneGrab web UI on [bold]{url}[/] (Ctrl+C to stop)")
     if host not in ("127.0.0.1", "localhost", "::1"):
         console.print(

@@ -7,6 +7,9 @@ Sources, best first:
   1 compilation, plus top tracks. Spotify embeds this as base64 JSON (``initialState``).
 * YouTube Music (no credentials): the complete discography with video IDs, used when the
   Spotify list is incomplete. Tracks from it skip matching (the video is known).
+
+Plain text goes to YouTube Music search: an artist's name opens the artist, anything else
+("Discovery Daft Punk", "One More Time") lists matching albums and songs.
 """
 
 from __future__ import annotations
@@ -48,6 +51,7 @@ class Release(BaseModel):
     cover_url: str | None = None
     source: ReleaseSource = "spotify"
     total_tracks: int | None = None
+    artist: str | None = None  # set in search results, where releases mix artists
 
 
 class ArtistOverview(BaseModel):
@@ -59,6 +63,87 @@ class ArtistOverview(BaseModel):
     releases: list[Release] = Field(default_factory=list)
     top_tracks: list[Track] = Field(default_factory=list)
     note: str | None = None
+
+
+class SongHit(BaseModel):
+    """A song from YouTube Music search; queueable as is (the video is known)."""
+
+    id: str  # video ID
+    title: str
+    artists: list[str] = Field(default_factory=list)
+    album: str | None = None
+    album_id: str | None = None
+    duration_s: int | None = None
+    explicit: bool = False
+    cover_url: str | None = None
+
+
+class ArtistHit(BaseModel):
+    id: str  # YouTube Music channel ID
+    name: str
+
+
+class SearchResults(BaseModel):
+    query: str
+    artist: ArtistHit | None = None  # an artist the text may also mean
+    releases: list[Release] = Field(default_factory=list)
+    songs: list[SongHit] = Field(default_factory=list)
+
+
+ARTIST_MATCH = 90  # text this close to the top result's artist name opens the artist
+MAX_SONGS = 10
+MAX_ALBUMS = 12
+
+
+def _norm(text: str) -> str:
+    return " ".join(re.sub(r"[^\w\s]", " ", text.casefold()).split())
+
+
+def _names(runs: Any) -> list[str]:
+    return [str(a["name"]) for a in runs or [] if isinstance(a, dict) and a.get("name")]
+
+
+def _artist_of(result: dict[str, Any]) -> ArtistHit | None:
+    runs = [a for a in result.get("artists") or [] if isinstance(a, dict) and a.get("name")]
+    name = runs[0]["name"] if runs else result.get("artist")
+    channel = (runs[0].get("id") if runs else None) or result.get("browseId")
+    if not name or not channel:
+        return None
+    return ArtistHit(id=str(channel), name=str(name))
+
+
+def _named_artist(text: str, results: list[dict[str, Any]]) -> ArtistHit | None:
+    top = results[0] if results else {}
+    if top.get("resultType") != "artist":
+        return None
+    hit = _artist_of(top)
+    if hit is None or fuzz.ratio(_norm(text), _norm(hit.name)) < ARTIST_MATCH:
+        return None
+    return hit
+
+
+def song_match(hit: SongHit) -> Match:
+    """A search hit as a ready-made match, so the download skips matching."""
+    track = Track(
+        title=hit.title,
+        artists=hit.artists,
+        album=hit.album,
+        album_artist=hit.artists[0] if hit.artists else None,
+        album_id=hit.album_id,
+        duration_ms=(hit.duration_s or 0) * 1000,
+        explicit=hit.explicit,
+        cover_url=hit.cover_url,
+    )
+    candidate = Candidate(
+        video_id=hit.id,
+        title=hit.title,
+        artists=hit.artists,
+        duration_s=hit.duration_s or 0,
+        source="ytmusic_song",
+        album=hit.album,
+        thumbnail_url=hit.cover_url,
+    )
+    return Match(track=track, candidate=candidate, score=100, reason="picked from search")
 
 
 def _kind(value: str | None) -> ReleaseKind:
@@ -204,8 +289,72 @@ class YTMusicCatalog:
             raise NotFoundError(f"No YouTube Music artist named {name!r}")
         return best[1]
 
-    def artist(self, name: str) -> ArtistOverview:
-        channel = self.find_artist(name)
+    def lookup(self, text: str) -> ArtistOverview | SearchResults:
+        """The artist when the text is their name (YouTube Music's top result), otherwise
+        the albums and songs that match."""
+        results = self._everything(text)
+        named = _named_artist(text, results)
+        if named is not None:
+            return self.artist(named.name, channel=named.id)
+        suggestion = None
+        for result in results:
+            hit = _artist_of(result) if result.get("resultType") == "artist" else None
+            if hit and fuzz.partial_ratio(_norm(hit.name), _norm(text)) >= ARTIST_MATCH:
+                suggestion = hit
+                break
+        return self.search(text, suggestion)
+
+    def named_artist(self, text: str) -> ArtistHit | None:
+        """The artist the text names, if that's what YouTube Music puts on top."""
+        return _named_artist(text, self._everything(text))
+
+    def _everything(self, text: str) -> list[dict[str, Any]]:
+        found = self.client.call("search", text, limit=10) or []
+        return [r for r in found if isinstance(r, dict)]
+
+    def search(self, text: str, artist: ArtistHit | None = None) -> SearchResults:
+        songs: list[SongHit] = []
+        for item in self.client.call("search", text, filter="songs", limit=MAX_SONGS) or []:
+            if not isinstance(item, dict) or not item.get("videoId") or len(songs) >= MAX_SONGS:
+                continue
+            album: dict[str, Any] = item["album"] if isinstance(item.get("album"), dict) else {}
+            seconds = item.get("duration_seconds")
+            songs.append(
+                SongHit(
+                    id=str(item["videoId"]),
+                    title=str(item.get("title") or "Unknown"),
+                    artists=_names(item.get("artists")),
+                    album=album.get("name"),
+                    album_id=album.get("id"),
+                    duration_s=int(seconds) if seconds else None,
+                    explicit=bool(item.get("isExplicit")),
+                    cover_url=best_thumbnail(item.get("thumbnails")),
+                )
+            )
+        releases: list[Release] = []
+        for item in self.client.call("search", text, filter="albums", limit=MAX_ALBUMS) or []:
+            if not isinstance(item, dict) or not item.get("browseId"):
+                continue
+            if len(releases) >= MAX_ALBUMS:
+                break
+            artists = _names(item.get("artists"))
+            releases.append(
+                Release(
+                    id=str(item["browseId"]),
+                    name=str(item.get("title") or item["browseId"]),
+                    kind=_kind(str(item.get("type") or "album")),
+                    year=_year(item.get("year")),
+                    cover_url=best_thumbnail(item.get("thumbnails")),
+                    source="ytmusic",
+                    artist=", ".join(artists) or None,
+                )
+            )
+        if not songs and not releases:
+            raise NotFoundError(f"Nothing on YouTube Music matches \u201c{text}\u201d.")
+        return SearchResults(query=text, artist=artist, releases=releases, songs=songs)
+
+    def artist(self, name: str, channel: str | None = None) -> ArtistOverview:
+        channel = channel or self.find_artist(name)
         data = self.client.call("get_artist", channel) or {}
         releases: list[Release] = []
         seen: set[str] = set()

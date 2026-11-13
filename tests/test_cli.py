@@ -187,7 +187,7 @@ def test_sync_lists_then_removes(services: dict[str, Any], tmp_path: Path) -> No
     no = invoke("sync", PLAYLIST, "--remove", input="n\n")
     assert no.exit_code == 0 and len(files(tmp_path)) == 5
     yes = invoke("sync", PLAYLIST, "--remove", "--yes")
-    assert "Deleted 2 file(s)" in yes.output, yes.output
+    assert "Deleted 2 of 2 file(s)" in yes.output, yes.output
     remaining = files(tmp_path)
     assert remaining == [
         "Artist 1/Album 1 (2020)/01 - Song 1.mp3",
@@ -220,12 +220,99 @@ def test_fix_overrides_and_redownloads(services: dict[str, Any], tmp_path: Path)
     assert len(files(tmp_path)) == 1  # old file replaced, not duplicated
 
 
+def test_fix_keeps_the_old_file_when_the_new_download_fails(
+    services: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    track: Track = make_track(1)
+    services["tracks"] = [track]
+    invoke("download", f"spotify:track:{track.spotify_id}")
+    [old] = files(tmp_path)
+    old_bytes = (tmp_path / "lib" / old).read_bytes()
+    build = cli.build_services
+
+    def broken(settings: Settings, http: Any = None) -> FakeServices:
+        svc = build(settings, http)
+        svc.downloader.unavailable.add("dQw4w9WgXcQ")
+        return svc
+
+    monkeypatch.setattr(cli, "build_services", broken)
+    result = invoke(
+        "fix", f"spotify:track:{track.spotify_id}", "https://youtu.be/dQw4w9WgXcQ", "--yes"
+    )
+    assert result.exit_code == 1
+    assert "old file is back in place" in result.output
+    assert files(tmp_path) == [old]  # no leftover backup, nothing lost
+    assert (tmp_path / "lib" / old).read_bytes() == old_bytes
+    svc = services["made"][-1]
+    svc.archive = Archive(svc.archive.path)
+    record = svc.archive.get_download(track.key)
+    assert record is not None and record.exists  # still known as downloaded
+
+
+def test_fix_reports_a_locked_old_file(
+    services: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    track: Track = make_track(1)
+    services["tracks"] = [track]
+    invoke("download", f"spotify:track:{track.spotify_id}")
+    [old] = files(tmp_path)
+
+    def locked(self: Path, target: Any) -> Path:
+        raise PermissionError(13, "The file is in use", str(self))
+
+    monkeypatch.setattr(Path, "replace", locked)
+    result = invoke(
+        "fix", f"spotify:track:{track.spotify_id}", "https://youtu.be/dQw4w9WgXcQ", "--yes"
+    )
+    assert result.exit_code == 1 and "close it and try again" in result.output
+    assert "Traceback" not in result.output
+    assert files(tmp_path) == [old]
+
+
+def test_sync_remove_reports_locked_files(
+    services: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    services["tracks"] = [make_track(1), make_track(2)]
+    assert invoke("sync", PLAYLIST).exit_code == 0
+    services["tracks"] = [make_track(1)]
+    invoke("sync", PLAYLIST)
+    real_unlink = Path.unlink
+
+    def unlink(self: Path, missing_ok: bool = False) -> None:
+        if self.suffix == ".mp3":
+            raise PermissionError(13, "The file is in use", str(self))
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    result = invoke("sync", PLAYLIST, "--remove", "--yes")
+    assert result.exit_code == 1, result.output
+    assert "Couldn't delete" in result.output and "Deleted 0 of 1" in result.output
+    assert "Traceback" not in result.output
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    retry = invoke("sync", PLAYLIST, "--remove", "--yes")  # still pending, works once closed
+    assert retry.exit_code == 0 and "Deleted 1 of 1" in retry.output, retry.output
+
+
+def test_login_network_failure_is_a_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tunegrab.metadata import spotify_api
+    from tunegrab.net import NetworkError
+
+    def offline(*args: Any, **kwargs: Any) -> None:
+        raise NetworkError("connection refused")
+
+    monkeypatch.setattr(spotify_api, "login", offline)
+    result = invoke("login")
+    assert result.exit_code == 1 and "Couldn't reach Spotify" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_fix_validates_input(services: dict[str, Any]) -> None:
     assert invoke("fix", ALBUM, "dQw4w9WgXcQ").exit_code == 1
     assert invoke("fix", f"spotify:track:{'1' * 22}", "not a video").exit_code == 1
 
 
-def test_config_commands() -> None:
+def test_config_commands(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TUNEGRAB_FORMAT")  # show what the config file says
     assert invoke("config", "set", "threads", "6").exit_code == 0
     assert invoke("config", "set", "format", "opus").exit_code == 0
     assert read_config_file() == {"threads": 6, "format": "opus"}
@@ -307,3 +394,75 @@ def test_video_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert "1080p H.264" in result.output
     bad = invoke("video", "https://youtu.be/dQw4w9WgXcQ", "-o", str(tmp_path), "-s", "9:00")
     assert bad.exit_code == 1 and "only 3:33 long" in bad.output
+
+
+def test_app_neutral_messages_get_cli_hints() -> None:
+    from tunegrab.cli import cli_hint
+
+    assert cli_hint("Liked Songs need a Spotify login.") == "Log in with: tunegrab login"
+    assert "tunegrab fix" in cli_hint("no match above 70 (best 52: title 40)")
+    assert "docs/SETUP.md" in cli_hint(
+        "Spotify rejected the client ID/secret. Check SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET"
+    )
+    assert cli_hint("Video unavailable") == ""
+    from tunegrab.download.ytdlp import BREAKAGE_HINT
+
+    assert "tunegrab doctor --update" in cli_hint(
+        f"YouTube refused this download (x). {BREAKAGE_HINT}"
+    )
+    from tunegrab.download.ytdlp import AGE_HINT, COOKIES_HINT
+
+    assert "cookies_from_browser firefox" in cli_hint(AGE_HINT)
+    assert "cookies_from_browser firefox" in cli_hint(COOKIES_HINT)
+
+
+def test_no_user_facing_message_names_the_cli_or_dotenv() -> None:
+    """Messages that reach the web app must not send people to a terminal or .env (M8)."""
+    import re
+    from pathlib import Path
+
+    import tunegrab
+
+    src = Path(tunegrab.__file__).parent
+    offenders = []
+    for path in src.rglob("*.py"):
+        if path.name == "cli.py" or path.name == "ui.py":
+            continue  # the CLI's own output may name commands
+        text = path.read_text(encoding="utf-8")
+        for literal in re.findall(r'"[^"\n]*"|\'[^\'\n]*\'', text):
+            if re.search(r"`tunegrab \w|run: tunegrab|\.env\b|docs/", literal):
+                offenders.append(f"{path.name}: {literal}")
+    allowed = {
+        'config.py: ".env"',  # the settings source itself
+        'config.py: "# TuneGrab settings. Edit by hand or with `tunegrab config set KEY VALUE`."',
+        'doctor.py: \'Update it: Settings > System > "Update yt-dlp", or run: '
+        "tunegrab doctor --update'",  # names the app path first
+        'youtube.py: "Full metadata for one video (used by ``tunegrab fix``)."',  # docstring
+        'spotify_api.py: "Run `tunegrab login` again."',  # log line
+        'spotify_api.py: "Spotify user token refresh failed (HTTP %s); run `tunegrab login`"',
+        'spotify_api.py: "Set SPOTIFY_CLIENT_ID first (docs/SETUP.md)."',  # `tunegrab login` only
+    }
+    assert sorted(set(offenders) - allowed) == []
+
+
+def test_history_from_a_newer_version_is_a_message() -> None:
+    settings = Settings(_env_file=None)
+    with Archive(settings.resolved_archive_path) as archive:
+        archive.set_meta("schema_version", 99)
+    result = invoke("status")
+    text = " ".join(result.output.split())  # Rich wraps long temp paths differently per OS
+    assert result.exit_code == 1 and "newer TuneGrab" in text
+    assert "Traceback" not in result.output
+
+
+def test_cli_retry_keeps_the_format_of_the_failed_job(services: dict[str, Any]) -> None:
+    track = make_track(1)
+    services["tracks"] = [track]
+    settings = Settings(_env_file=None)
+    with Archive(settings.resolved_archive_path) as archive:
+        archive.record_failure("spotify:album:x", None, 1, track, "downloading", "boom", "opus")
+    result = invoke("retry")
+    assert result.exit_code == 0, result.output
+    with Archive(settings.resolved_archive_path) as archive:
+        record = archive.get_download(track.key)
+        assert record is not None and record.format == "opus"

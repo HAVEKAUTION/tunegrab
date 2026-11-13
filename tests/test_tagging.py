@@ -141,8 +141,10 @@ def test_images(jpeg_bytes: bytes, tmp_path: Path) -> None:
             "1",
             str(webp),
         ],
-        check=True,
+        check=False,
     )
+    if not webp.exists():
+        pytest.skip("this ffmpeg build can't write WebP")
     converted = to_embeddable_image(webp.read_bytes())
     assert converted is not None and converted[1] == "image/jpeg"
     assert to_embeddable_image(b"garbage") is None
@@ -206,3 +208,17 @@ def test_lrclib_skips_get_without_album() -> None:
 def test_write_lrc(tmp_path: Path) -> None:
     path = write_lrc(tmp_path / "song.mp3", "[00:01.00]hi\n")
     assert path.name == "song.lrc" and path.read_text("utf-8") == "[00:01.00]hi\n"
+
+
+@requires_ffmpeg
+@pytest.mark.parametrize("ext", ["mp3", "m4a", "opus", "flac"])
+def test_identify_reads_back_title_and_artist(
+    audio_files: dict[str, Path], tmp_path: Path, ext: str
+) -> None:
+    from tunegrab.tagging.tagger import MutagenTagger, read_title_artist
+
+    path = copy(audio_files[ext], tmp_path)
+    assert read_title_artist(path) is None  # untagged
+    MutagenTagger().tag(path, make_track(1))
+    assert MutagenTagger().identify(path) == ("Song 1", "Artist 1")
+    assert read_title_artist(tmp_path / "missing.mp3") is None

@@ -3,16 +3,51 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
-from tunegrab.models import Candidate, Collection, Track
+from pydantic import ValidationError
 
-SCHEMA_VERSION = 1
+from tunegrab.config import set_aside, startup_warnings
+from tunegrab.errors import TuneGrabError
+from tunegrab.models import Alternative, Candidate, Collection, Track
+
+log = logging.getLogger(__name__)
+T = TypeVar("T")
+
+SCHEMA_VERSION = 4
+# Version n -> the statements that upgrade a version n-1 history to n, run in one
+# transaction after a backup copy is made. SCHEMA below is always the newest layout (it
+# creates fresh histories and any table an older one lacks).
+MIGRATIONS: dict[int, tuple[str, ...]] = {
+    2: ("ALTER TABLE failures ADD COLUMN format TEXT",),  # retries keep the job's format
+    3: (  # videos and audio-from-link downloads, done or failed
+        """CREATE TABLE IF NOT EXISTS videos (
+    key TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    entry_json TEXT NOT NULL,
+    options_json TEXT NOT NULL,
+    format TEXT,
+    path TEXT,
+    source TEXT,
+    status TEXT NOT NULL,
+    error TEXT,
+    updated_at TEXT NOT NULL
+);""",
+    ),
+    4: (  # match review (other candidates, "check this match") and what YouTube served
+        "ALTER TABLE match_cache ADD COLUMN alternatives_json TEXT",
+        "ALTER TABLE downloads ADD COLUMN review TEXT",
+        "ALTER TABLE downloads ADD COLUMN source TEXT",
+        "ALTER TABLE downloads ADD COLUMN low_quality INTEGER NOT NULL DEFAULT 0",
+    ),
+}
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS job_history (
@@ -28,7 +63,10 @@ CREATE TABLE IF NOT EXISTS downloads (
     artist TEXT,
     album TEXT,
     track_json TEXT NOT NULL,
-    downloaded_at TEXT NOT NULL
+    downloaded_at TEXT NOT NULL,
+    review TEXT,
+    source TEXT,
+    low_quality INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS match_cache (
     key TEXT PRIMARY KEY,
@@ -36,7 +74,8 @@ CREATE TABLE IF NOT EXISTS match_cache (
     score REAL NOT NULL,
     reason TEXT NOT NULL,
     manual INTEGER NOT NULL DEFAULT 0,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    alternatives_json TEXT
 );
 CREATE TABLE IF NOT EXISTS failures (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,9 +89,22 @@ CREATE TABLE IF NOT EXISTS failures (
     stage TEXT,
     reason TEXT NOT NULL,
     failed_at TEXT NOT NULL,
-    resolved INTEGER NOT NULL DEFAULT 0
+    resolved INTEGER NOT NULL DEFAULT 0,
+    format TEXT
 );
 CREATE INDEX IF NOT EXISTS failures_open ON failures (resolved, key);
+CREATE TABLE IF NOT EXISTS videos (
+    key TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    entry_json TEXT NOT NULL,
+    options_json TEXT NOT NULL,
+    format TEXT,
+    path TEXT,
+    source TEXT,
+    status TEXT NOT NULL,
+    error TEXT,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS playlists (
     playlist_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -81,10 +133,24 @@ class DownloadRecord:
     format: str | None
     track: Track
     downloaded_at: str
+    review: str | None = None  # why the match should be checked; None once it is fine
+    source: str | None = None  # what YouTube served, e.g. "Opus 129 kbps"
+    low_quality: bool = False
 
     @property
     def exists(self) -> bool:
         return self.path.is_file()
+
+
+@dataclass(frozen=True)
+class MatchRecord:
+    """The video remembered for a song, and the next-best ones found with it."""
+
+    candidate: Candidate
+    score: float
+    reason: str
+    manual: bool
+    alternatives: list[Alternative]
 
 
 @dataclass(frozen=True)
@@ -100,24 +166,140 @@ class FailureRecord:
     stage: str | None
     reason: str
     failed_at: str
+    format: str | None = None
+
+
+@dataclass(frozen=True)
+class VideoRecord:
+    """A video link downloaded (status "done") or not (status "failed") with given options.
+    ``entry`` and ``options`` are plain dicts so the archive needn't know the video module."""
+
+    key: str
+    url: str
+    entry: dict[str, Any]
+    options: dict[str, Any]
+    format: str | None
+    path: Path | None
+    source: str | None
+    status: str
+    error: str | None
+    updated_at: str
+
+    @property
+    def exists(self) -> bool:
+        return self.path is not None and self.path.is_file()
+
+
+class SchemaTooNewError(TuneGrabError):
+    """The history was written by a newer TuneGrab; opening it here could damage it."""
+
+
+class MigrationError(TuneGrabError):
+    """Upgrading the history failed; it was left as it was (and a backup exists)."""
 
 
 class Archive:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
-        if str(path) != ":memory:":
+        self._memory = str(path) == ":memory:"
+        if not self._memory:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(str(path), check_same_thread=False, timeout=30)
-        self._conn.row_factory = sqlite3.Row
-        with self._lock, self._conn:
-            if str(path) != ":memory:":
-                self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.executescript(SCHEMA)
-            self._conn.execute(
-                "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
-                (str(SCHEMA_VERSION),),
+        try:
+            self._conn = self._open()
+        except sqlite3.DatabaseError as exc:
+            if self._memory:
+                raise
+            self._conn = self._recover(exc)
+
+    def _open(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.path), check_same_thread=False, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            with conn:
+                if not self._memory:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                        raise sqlite3.DatabaseError("integrity check failed")
+            self._migrate(conn)
+            with conn:
+                conn.executescript(SCHEMA)
+                conn.execute(
+                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
+                    (str(SCHEMA_VERSION),),
+                )
+        except BaseException:
+            conn.close()
+            raise
+        return conn
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        """Bring an older history up to SCHEMA_VERSION (backup first, one transaction)."""
+        has_meta = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'"
+        ).fetchone()
+        if not has_meta:
+            return  # a new, empty history
+        row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        try:
+            version = int(json.loads(row[0])) if row else 1
+        except (TypeError, ValueError) as exc:
+            raise sqlite3.DatabaseError(f"bad schema version {row[0]!r}") from exc
+        if version > SCHEMA_VERSION:
+            raise SchemaTooNewError(
+                f"Your download history ({self.path}) was made by a newer TuneGrab "
+                f"(format {version}; this version reads up to {SCHEMA_VERSION}). Update "
+                "TuneGrab to use it; it hasn't been changed."
             )
+        if version == SCHEMA_VERSION:
+            return
+        backup = self.path.with_name(f"{self.path.name}.bak-v{version}")
+        if not self._memory:
+            target = sqlite3.connect(str(backup))
+            try:
+                conn.backup(target)
+            finally:
+                target.close()
+            log.info("backed up the download history to %s before upgrading it", backup)
+        conn.execute("BEGIN")
+        try:
+            for step in range(version + 1, SCHEMA_VERSION + 1):
+                for statement in MIGRATIONS[step]:
+                    conn.execute(statement)
+            conn.execute(
+                "UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(SCHEMA_VERSION),)
+            )
+            if row is None:
+                conn.execute(
+                    "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+                    (str(SCHEMA_VERSION),),
+                )
+        except sqlite3.Error as exc:
+            conn.rollback()
+            raise MigrationError(
+                f"TuneGrab couldn't upgrade your download history ({exc}). It was left as it "
+                f"was; a copy is at {backup}."
+            ) from exc
+        except BaseException:
+            conn.rollback()
+            raise
+        conn.commit()
+        log.info("download history upgraded from format %s to %s", version, SCHEMA_VERSION)
+
+    def _recover(self, exc: sqlite3.DatabaseError) -> sqlite3.Connection:
+        """The download history is damaged: keep it aside and start a fresh one."""
+        kept = set_aside(self.path, "corrupt")
+        for suffix in ("-wal", "-shm"):
+            side = self.path.with_name(self.path.name + suffix)
+            if side.exists():
+                set_aside(side, "corrupt")
+        log.error("download history %s was unreadable (%s); kept as %s", self.path, exc, kept)
+        startup_warnings.append(
+            f"Your download history couldn't be read ({exc}), so TuneGrab started a new one. "
+            f"Your music files are untouched; the old history was kept as {kept}. Songs you "
+            "already have are recognised again when you download them."
+        )
+        return self._open()
 
     def close(self) -> None:
         with self._lock:
@@ -166,7 +348,7 @@ class Archive:
 
     def job_history(self) -> list[dict[str, Any]]:
         rows = self._execute("SELECT summary FROM job_history ORDER BY finished_at DESC")
-        return [json.loads(r["summary"]) for r in rows]
+        return _parse_rows(rows, lambda r: dict(json.loads(r["summary"])), "job history")
 
     def clear_job_history(self) -> int:
         with self._lock, self._conn:
@@ -175,7 +357,8 @@ class Archive:
     # --- downloads -------------------------------------------------------------------
     def get_download(self, key: str) -> DownloadRecord | None:
         rows = self._execute("SELECT * FROM downloads WHERE key = ?", (key,))
-        return self._download_row(rows[0]) if rows else None
+        found = _parse_rows(rows, self._download_row, "download")
+        return found[0] if found else None
 
     def downloaded_path(self, key: str) -> Path | None:
         """Path of an archived download whose file still exists."""
@@ -183,17 +366,28 @@ class Archive:
         return record.path if record and record.exists else None
 
     def record_download(
-        self, track: Track, path: Path, video_id: str | None, fmt: str | None
+        self,
+        track: Track,
+        path: Path,
+        video_id: str | None,
+        fmt: str | None,
+        *,
+        review: str | None = None,
+        source: str | None = None,
+        low_quality: bool = False,
     ) -> None:
         self._execute(
             """INSERT INTO downloads (key, spotify_id, path, video_id, format, title, artist,
-                                      album, track_json, downloaded_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                      album, track_json, downloaded_at, review, source,
+                                      low_quality)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(key) DO UPDATE SET
                  spotify_id=excluded.spotify_id, path=excluded.path,
                  video_id=excluded.video_id, format=excluded.format, title=excluded.title,
                  artist=excluded.artist, album=excluded.album,
-                 track_json=excluded.track_json, downloaded_at=excluded.downloaded_at""",
+                 track_json=excluded.track_json, downloaded_at=excluded.downloaded_at,
+                 review=excluded.review, source=excluded.source,
+                 low_quality=excluded.low_quality""",
             (
                 track.key,
                 track.spotify_id,
@@ -205,15 +399,26 @@ class Archive:
                 track.album,
                 track.model_dump_json(),
                 _now(),
+                review,
+                source,
+                int(low_quality),
             ),
         )
+
+    def clear_review(self, key: str) -> None:
+        """The user looked at this match and is happy with it."""
+        self._execute("UPDATE downloads SET review = NULL WHERE key = ?", (key,))
+
+    def path_is_recorded(self, path: Path) -> bool:
+        """True if any archived download (of any song) points at ``path``."""
+        return bool(self._execute("SELECT 1 FROM downloads WHERE path = ? LIMIT 1", (str(path),)))
 
     def forget_download(self, key: str) -> None:
         self._execute("DELETE FROM downloads WHERE key = ?", (key,))
 
     def all_downloads(self) -> list[DownloadRecord]:
         rows = self._execute("SELECT * FROM downloads ORDER BY artist, album, title")
-        return [self._download_row(r) for r in rows]
+        return _parse_rows(rows, self._download_row, "download")
 
     @staticmethod
     def _download_row(row: sqlite3.Row) -> DownloadRecord:
@@ -224,6 +429,9 @@ class Archive:
             format=row["format"],
             track=Track.model_validate_json(row["track_json"]),
             downloaded_at=row["downloaded_at"],
+            review=row["review"] or None,
+            source=row["source"],
+            low_quality=bool(row["low_quality"]),
         )
 
     # --- match cache -----------------------------------------------------------------
@@ -236,20 +444,50 @@ class Archive:
         row = rows[0]
         return Candidate.model_validate_json(row["candidate_json"]), row["score"], row["reason"]
 
+    def match_record(self, key: str) -> MatchRecord | None:
+        rows = self._execute("SELECT * FROM match_cache WHERE key = ?", (key,))
+        found = _parse_rows(
+            rows,
+            lambda r: MatchRecord(
+                candidate=Candidate.model_validate_json(r["candidate_json"]),
+                score=r["score"],
+                reason=r["reason"],
+                manual=bool(r["manual"]),
+                alternatives=_alternatives(r["alternatives_json"]),
+            ),
+            "match",
+        )
+        return found[0] if found else None
+
     def put_match(
-        self, key: str, candidate: Candidate, score: float, reason: str, manual: bool = False
+        self,
+        key: str,
+        candidate: Candidate,
+        score: float,
+        reason: str,
+        manual: bool = False,
+        alternatives: list[Alternative] | None = None,
     ) -> None:
-        """Cache a match. Automatic matches never overwrite a manual override."""
+        """Cache a match. Automatic matches never overwrite a manual override.
+        ``alternatives`` None keeps the ones already saved for the song."""
+        saved = None if alternatives is None else dumps([a.model_dump() for a in alternatives])
         self._execute(
-            """INSERT INTO match_cache (key, candidate_json, score, reason, manual, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?)
+            """INSERT INTO match_cache (key, candidate_json, score, reason, manual, updated_at,
+                                        alternatives_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(key) DO UPDATE SET
                  candidate_json=excluded.candidate_json, score=excluded.score,
                  reason=excluded.reason, manual=excluded.manual,
-                 updated_at=excluded.updated_at
+                 updated_at=excluded.updated_at,
+                 alternatives_json=COALESCE(excluded.alternatives_json,
+                                            match_cache.alternatives_json)
                WHERE match_cache.manual = 0 OR excluded.manual = 1""",
-            (key, candidate.model_dump_json(), score, reason, int(manual), _now()),
+            (key, candidate.model_dump_json(), score, reason, int(manual), _now(), saved),
         )
+
+    def confirm_match(self, key: str) -> None:
+        """Keep the remembered video for good: automatic matches no longer replace it."""
+        self._execute("UPDATE match_cache SET manual = 1 WHERE key = ?", (key,))
 
     def clear_match(self, key: str) -> None:
         self._execute("DELETE FROM match_cache WHERE key = ?", (key,))
@@ -267,13 +505,14 @@ class Archive:
         track: Track,
         stage: str | None,
         reason: str,
+        fmt: str | None = None,
     ) -> None:
         with self._lock, self._conn:
             self._conn.execute("DELETE FROM failures WHERE key = ? AND resolved = 0", (track.key,))
             self._conn.execute(
                 """INSERT INTO failures (key, job_input, collection_kind, collection_id,
-                     collection_name, position, track_json, stage, reason, failed_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                     collection_name, position, track_json, stage, reason, failed_at, format)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     track.key,
                     job_input,
@@ -285,13 +524,15 @@ class Archive:
                     stage,
                     reason,
                     _now(),
+                    fmt,
                 ),
             )
 
     def open_failures(self) -> list[FailureRecord]:
         rows = self._execute("SELECT * FROM failures WHERE resolved = 0 ORDER BY id")
-        return [
-            FailureRecord(
+        return _parse_rows(
+            rows,
+            lambda r: FailureRecord(
                 id=r["id"],
                 key=r["key"],
                 job_input=r["job_input"],
@@ -303,17 +544,106 @@ class Archive:
                 stage=r["stage"],
                 reason=r["reason"],
                 failed_at=r["failed_at"],
-            )
-            for r in rows
-        ]
+                format=r["format"],
+            ),
+            "failure",
+        )
+
+    # --- videos ---------------------------------------------------------------------------
+    def _put_video(
+        self,
+        key: str,
+        entry: dict[str, Any],
+        options: dict[str, Any],
+        fmt: str | None,
+        *,
+        path: Path | None,
+        source: str | None,
+        status: str,
+        error: str | None,
+    ) -> None:
+        self._execute(
+            """INSERT OR REPLACE INTO videos (key, url, entry_json, options_json, format, path,
+                 source, status, error, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                key,
+                str(entry.get("url", "")),
+                dumps(entry),
+                dumps(options),
+                fmt,
+                str(path) if path is not None else None,
+                source,
+                status,
+                error,
+                _now(),
+            ),
+        )
+
+    def record_video(
+        self,
+        key: str,
+        entry: dict[str, Any],
+        options: dict[str, Any],
+        fmt: str | None,
+        path: Path,
+        source: str | None,
+    ) -> None:
+        self._put_video(
+            key, entry, options, fmt, path=path, source=source, status="done", error=None
+        )
+
+    def record_video_failure(
+        self,
+        key: str,
+        entry: dict[str, Any],
+        options: dict[str, Any],
+        fmt: str | None,
+        error: str,
+    ) -> None:
+        done = self.get_video(key)
+        if done is not None and done.status == "done" and done.exists:
+            return  # a copy is already saved; don't list it as failed
+        self._put_video(
+            key, entry, options, fmt, path=None, source=None, status="failed", error=error
+        )
+
+    def _video_rows(self, where: str, params: tuple[Any, ...] = ()) -> list[VideoRecord]:
+        rows = self._execute(f"SELECT * FROM videos {where}", params)
+        return _parse_rows(
+            rows,
+            lambda r: VideoRecord(
+                key=r["key"],
+                url=r["url"],
+                entry=json.loads(r["entry_json"]),
+                options=json.loads(r["options_json"]),
+                format=r["format"],
+                path=Path(r["path"]) if r["path"] else None,
+                source=r["source"],
+                status=r["status"],
+                error=r["error"],
+                updated_at=r["updated_at"],
+            ),
+            "video",
+        )
+
+    def get_video(self, key: str) -> VideoRecord | None:
+        found = self._video_rows("WHERE key = ?", (key,))
+        return found[0] if found else None
+
+    def all_videos(self) -> list[VideoRecord]:
+        return self._video_rows("WHERE status = 'done' ORDER BY updated_at DESC")
+
+    def video_failures(self) -> list[VideoRecord]:
+        return self._video_rows("WHERE status = 'failed' ORDER BY updated_at")
 
     def resolve_failures(self, key: str) -> None:
         self._execute("UPDATE failures SET resolved = 1 WHERE key = ? AND resolved = 0", (key,))
 
     def clear_failures(self) -> int:
         with self._lock, self._conn:
+            videos = self._conn.execute("DELETE FROM videos WHERE status = 'failed'").rowcount
             cursor = self._conn.execute("UPDATE failures SET resolved = 1 WHERE resolved = 0")
-            return cursor.rowcount
+            return cursor.rowcount + videos
 
     # --- playlists -------------------------------------------------------------------
     def set_playlist(self, collection: Collection) -> None:
@@ -347,7 +677,9 @@ class Archive:
             "ORDER BY position",
             (playlist_id,),
         )
-        return [(r["position"], Track.model_validate_json(r["track_json"])) for r in rows]
+        return _parse_rows(
+            rows, lambda r: (r["position"], Track.model_validate_json(r["track_json"])), "member"
+        )
 
     def playlist_name(self, playlist_id: str) -> str | None:
         rows = self._execute("SELECT name FROM playlists WHERE playlist_id = ?", (playlist_id,))
@@ -381,3 +713,28 @@ class Archive:
 
 def dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
+
+
+def _alternatives(raw: str | None) -> list[Alternative]:
+    """Saved alternatives; unreadable ones (an older layout) are dropped, not fatal."""
+    if not raw:
+        return []
+    try:
+        return [Alternative.model_validate(item) for item in json.loads(raw)]
+    except (ValidationError, ValueError, TypeError) as exc:
+        log.warning("skipping unreadable saved alternatives: %s", exc)
+        return []
+
+
+def _parse_rows(
+    rows: Iterable[sqlite3.Row], parse: Callable[[sqlite3.Row], T], what: str
+) -> list[T]:
+    """Parse rows, skipping (and logging) any that no longer fit the model, so one bad
+    record can't take down the whole Library or retry list."""
+    parsed: list[T] = []
+    for row in rows:
+        try:
+            parsed.append(parse(row))
+        except (ValidationError, ValueError, TypeError, KeyError) as exc:
+            log.warning("skipping an unreadable %s record: %s", what, exc)
+    return parsed

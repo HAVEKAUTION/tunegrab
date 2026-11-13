@@ -1,6 +1,6 @@
 [project]
 name = "tunegrab"
-version = "0.4.1"
+version = "0.6.0"
 description = "Personal-use local music downloader: Spotify metadata -> YouTube audio -> tagged files."
 readme = "README.md"
 authors = [
@@ -20,7 +20,7 @@ dependencies = [
     "rapidfuzz>=3.14.6",
     "rich>=15.0.0",
     "typer>=0.29.0",
-    "uvicorn>=0.30",
+    "uvicorn>=0.54.0",
     "yt-dlp[default]>=2026.10.26",
     "ytmusicapi>=1.12.3",
 ]
@@ -47,6 +47,11 @@ testpaths = ["tests"]
 addopts = "-m 'not live'"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    # FastAPI's TestClient asks for the "httpx2" package; tests keep httpx until it is
+    # adopted (adding it needs the owner's go-ahead). Not a DeprecationWarning subclass.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]
 markers = [
     "live: hits the real network (Spotify / YouTube); skipped by default, run with -m live",
 ]

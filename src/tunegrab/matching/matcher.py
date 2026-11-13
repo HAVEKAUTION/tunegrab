@@ -7,19 +7,43 @@ from typing import Protocol
 
 from tunegrab.matching.base import AudioProvider, SearchError
 from tunegrab.matching.scoring import score
-from tunegrab.models import Candidate, Match, Track
+from tunegrab.models import Alternative, Candidate, Match, Track
 
 log = logging.getLogger(__name__)
 
 STRONG_MATCH = 90.0
+MAX_ALTERNATIVES = 3  # next-best videos kept with a match, for "Check this match"
 
 
 class MatchCache(Protocol):
     def get_match(self, key: str) -> tuple[Candidate, float, str] | None: ...
 
     def put_match(
-        self, key: str, candidate: Candidate, score: float, reason: str, manual: bool = False
+        self,
+        key: str,
+        candidate: Candidate,
+        score: float,
+        reason: str,
+        manual: bool = False,
+        alternatives: list[Alternative] | None = None,
     ) -> None: ...
+
+
+def alternatives_to(best: Match, ranked: list[Match]) -> list[Alternative]:
+    """The next-best distinct videos after ``best`` (the same video can come from two
+    providers; its higher score is kept)."""
+    chosen = best.candidate.video_id if best.candidate else None
+    seen: set[str] = set()
+    found: list[Alternative] = []
+    for match in sorted(ranked, key=lambda m: m.score, reverse=True):
+        candidate = match.candidate
+        if candidate is None or candidate.video_id == chosen or candidate.video_id in seen:
+            continue
+        seen.add(candidate.video_id)
+        found.append(Alternative(candidate=candidate, score=match.score, reason=match.reason))
+        if len(found) == MAX_ALTERNATIVES:
+            break
+    return found
 
 
 class Matcher:
@@ -56,6 +80,7 @@ class Matcher:
                 )
 
         best: Match | None = None
+        everything: list[Match] = []
         errors: list[str] = []
         for provider in self.providers:
             try:
@@ -67,6 +92,7 @@ class Matcher:
             if exclude:
                 candidates = [c for c in candidates if c.video_id not in exclude]
             ranked = self.rank(track, candidates)
+            everything += ranked
             if ranked and (best is None or ranked[0].score > best.score):
                 best = ranked[0]
             if best is not None and best.score >= self.strong:
@@ -75,6 +101,9 @@ class Matcher:
         if best is None:
             reason = "no search results" + (f" ({'; '.join(errors)})" if errors else "")
             return Match(track=track, candidate=None, score=0.0, reason=reason)
+        best.alternatives = alternatives_to(best, everything)
         if self.cache is not None and best.candidate is not None and best.accepted(self.threshold):
-            self.cache.put_match(track.key, best.candidate, best.score, best.reason)
+            self.cache.put_match(
+                track.key, best.candidate, best.score, best.reason, alternatives=best.alternatives
+            )
         return best

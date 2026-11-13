@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -9,9 +10,23 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.fakes import ALBUM_ID, FakeServices
+from tests.fakes import (
+    ALBUM_ID,
+    COVER_VIDEO,
+    LIVE_VIDEO,
+    PLAYLIST_ID,
+    STUDIO_VIDEO,
+    FakeAudio,
+    FakeServices,
+    doubtful_candidates,
+    make_track,
+)
 from tunegrab.config import Settings, read_config_file
+from tunegrab.matching.matcher import Matcher
+from tunegrab.models import Collection, Track
+from tunegrab.services import Services
 from tunegrab.web import app as web_app
+from tunegrab.web import jobs as web_jobs
 from tunegrab.web.app import create_app
 
 ALBUM = f"https://open.spotify.com/album/{ALBUM_ID}"
@@ -40,16 +55,14 @@ def wait_for(client: TestClient, job_id: str, states: tuple[str, ...]) -> dict[s
 
 def test_index_and_health(client: TestClient) -> None:
     page = client.get("/")
-    assert page.status_code == 200 and "TuneGrab" in page.text and "EventSource" in page.text
+    assert page.status_code == 200 and "TuneGrab" in page.text
+    assert '<script src="/app.js">' in page.text and 'href="/app.css"' in page.text
+    script, style = client.get("/app.js"), client.get("/app.css")
+    assert script.headers["content-type"].startswith("text/javascript")
+    assert "EventSource" in script.text and ":root" in style.text
+    assert style.headers["content-type"].startswith("text/css")
+    assert page.headers["cache-control"] == "no-cache"
     assert client.get("/api/health").json()["ok"] is True
-
-
-def test_preview(client: TestClient) -> None:
-    data = client.get("/api/preview", params={"url": ALBUM}).json()
-    assert data["name"] == "Fake Album" and len(data["tracks"]) == 3
-    assert client.get("/api/preview", params={"url": "nope"}).status_code == 400
-    missing = client.get("/api/preview", params={"url": f"spotify:track:{'7' * 22}"})
-    assert missing.status_code == 404
 
 
 def test_job_lifecycle_and_library(client: TestClient) -> None:
@@ -85,6 +98,236 @@ def test_retry_failed(client: TestClient, services: FakeServices) -> None:
     assert again["counts"]["done"] == 3
 
 
+def test_retry_is_single_shot(client: TestClient, services: FakeServices) -> None:
+    services.settings = services.settings.model_copy(update={"retries": 0})
+    services.downloader.fail_times = 3
+    job = wait_for(
+        client, client.post("/api/jobs", json={"url": ALBUM}).json()["id"], ("finished",)
+    )
+    assert job["retryable"] == 3
+    first = client.post(f"/api/jobs/{job['id']}/retry")
+    second = client.post(f"/api/jobs/{job['id']}/retry")
+    assert first.status_code == 202
+    assert second.status_code == 409 and "Already retried" in second.json()["detail"]
+    old = client.get(f"/api/jobs/{job['id']}").json()
+    assert old["retryable"] == 0 and all(t["retried"] for t in old["tasks"])
+    task_fix = f"/api/jobs/{job['id']}/tasks/{old['tasks'][0]['id']}/fix"
+    assert client.post(task_fix, json={"youtube_url": "dQw4w9WgXcQ"}).status_code == 409
+    wait_for(client, first.json()["id"], ("finished",))
+    jobs = [j for j in client.get("/api/jobs").json() if j["input"] == ALBUM]
+    assert len(jobs) == 2  # the original and exactly one retry
+
+
+def test_retry_all_failures_is_single_shot(client: TestClient, services: FakeServices) -> None:
+    services.settings = services.settings.model_copy(update={"retries": 0})
+    services.downloader.fail_times = 3
+    wait_for(client, client.post("/api/jobs", json={"url": ALBUM}).json()["id"], ("finished",))
+    services.downloader.block = threading.Event()
+    first = client.post("/api/failures/retry")
+    second = client.post("/api/failures/retry")
+    assert first.status_code == 202
+    assert second.status_code == 409 and "already being retried" in second.json()["detail"]
+    services.downloader.block.set()
+    wait_for(client, first.json()["id"], ("finished",))
+
+
+def test_slow_page_gets_a_resync_instead_of_lost_events(client: TestClient) -> None:
+    manager = client.app.state.manager  # type: ignore[attr-defined]
+    queue = manager.subscribe()
+    for n in range(web_jobs.MAX_QUEUED_EVENTS + 5):
+        manager._publish("task", {"n": n})
+    messages = []
+    while not queue.empty():
+        messages.append(queue.get_nowait())
+    manager.unsubscribe(queue)
+    assert messages[0] == web_jobs.RESYNC_EVENT
+    assert len(messages) == 6 and '"n": 1004' in messages[-1]
+
+
+def test_song_snapshots_carry_a_rising_revision(client: TestClient) -> None:
+    created = client.post("/api/jobs", json={"url": ALBUM}).json()
+    first = wait_for(client, created["id"], ("finished",))["tasks"][0]["rev"]
+    second = client.get(f"/api/jobs/{created['id']}").json()["tasks"][0]["rev"]
+    assert second > first
+
+
+def test_rate_limit_pause_shows_and_can_be_ended(
+    client: TestClient, services: FakeServices
+) -> None:
+    from tunegrab.pipeline import RATE_LIMIT_BLOCK_AFTER
+
+    services.downloader.rate_limited_times = RATE_LIMIT_BLOCK_AFTER
+    original = services.pipeline
+
+    def long_pause(on_event: Any = None, settings: Any = None) -> Any:
+        pipeline = original(on_event, settings)
+        pipeline.rate_limit_pause = 0.0
+        pipeline.rate_limit_block = 3600.0
+        return pipeline
+
+    services.pipeline = long_pause  # type: ignore[method-assign]
+    created = client.post("/api/jobs", json={"url": ALBUM}).json()
+    deadline = time.monotonic() + 10
+    while not client.get(f"/api/jobs/{created['id']}").json()["paused_until"]:
+        assert time.monotonic() < deadline, "never paused"
+        time.sleep(0.05)
+    resumed = client.post(f"/api/jobs/{created['id']}/resume")
+    assert resumed.status_code == 200 and resumed.json()["paused_until"] is None
+    job = wait_for(client, created["id"], ("finished",))
+    assert job["counts"]["done"] == 3
+    assert client.post(f"/api/jobs/{created['id']}/resume").status_code == 409
+
+
+def test_uncaught_errors_become_plain_json(services: FakeServices) -> None:
+    from tunegrab.net import NetworkError
+    from tunegrab.video import VideoError
+
+    app = create_app(services=services)
+
+    def bug() -> None:
+        raise KeyError("tracks")
+
+    def offline() -> None:
+        raise NetworkError("Couldn't reach Spotify.")
+
+    def bad_clip() -> None:
+        raise VideoError("The clip must end after it starts.")
+
+    app.add_api_route("/api/test-bug", bug)
+    app.add_api_route("/api/test-offline", offline)
+    app.add_api_route("/api/test-clip", bad_clip)
+    with TestClient(
+        app, base_url="http://127.0.0.1:8765", raise_server_exceptions=False
+    ) as test_client:
+        crashed = test_client.get("/api/test-bug")
+        assert crashed.status_code == 500
+        detail = crashed.json()["detail"]
+        assert detail.startswith("Something unexpected went wrong (KeyError")
+        assert "Traceback" not in detail
+        assert test_client.get("/api/test-offline").json() == {"detail": "Couldn't reach Spotify."}
+        assert test_client.get("/api/test-offline").status_code == 502
+        assert test_client.get("/api/test-clip").status_code == 400
+
+
+def _formats(services: FakeServices) -> set[str | None]:
+    return {r.format for r in services.archive.all_downloads()}
+
+
+def test_retry_keeps_the_jobs_format(client: TestClient, services: FakeServices) -> None:
+    services.settings = services.settings.model_copy(update={"retries": 0})
+    services.downloader.fail_times = 3
+    created = client.post("/api/jobs", json={"url": ALBUM, "format": "opus"}).json()
+    job = wait_for(client, created["id"], ("finished",))
+    assert {f.format for f in services.archive.open_failures()} == {"opus"}
+    retried = client.post(f"/api/jobs/{job['id']}/retry").json()
+    assert wait_for(client, retried["id"], ("finished",))["counts"]["done"] == 3
+    assert _formats(services) == {"opus"}  # not the default mp3
+
+
+def test_fix_link_keeps_the_jobs_format(client: TestClient, services: FakeServices) -> None:
+    services.settings = services.settings.model_copy(update={"retries": 0})
+    services.downloader.fail_times = 3
+    created = client.post("/api/jobs", json={"url": ALBUM, "format": "m4a"}).json()
+    job = wait_for(client, created["id"], ("finished",))
+    url = f"/api/jobs/{job['id']}/tasks/{job['tasks'][0]['id']}/fix"
+    fixed = client.post(url, json={"youtube_url": "dQw4w9WgXcQ"}).json()
+    wait_for(client, fixed["id"], ("finished",))
+    assert _formats(services) == {"m4a"}
+
+
+def test_retry_all_after_restart_keeps_each_format(
+    services: FakeServices,
+) -> None:
+    services.settings = services.settings.model_copy(update={"retries": 0})
+    services.downloader.fail_times = 3
+    with TestClient(create_app(services=services), base_url="http://127.0.0.1:8765") as first:
+        created = first.post("/api/jobs", json={"url": ALBUM, "format": "opus"}).json()
+        wait_for(first, created["id"], ("finished",))
+    # a new server (as after a restart) only has the failure records
+    with TestClient(create_app(services=services), base_url="http://127.0.0.1:8765") as second:
+        retried = second.post("/api/failures/retry").json()
+        assert wait_for(second, retried["id"], ("finished",))["counts"]["done"] == 3
+    assert _formats(services) == {"opus"}
+
+
+def test_video_retry_keeps_the_jobs_format(
+    client: TestClient, services: FakeServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = client.app.state.manager  # type: ignore[attr-defined]
+    used: list[str | None] = []
+    original = manager._video_pipeline
+
+    def spy(options: Any, entries: Any, fmt: str | None) -> Any:
+        used.append(fmt)
+        return original(options, entries, fmt)
+
+    monkeypatch.setattr(manager, "_video_pipeline", spy)
+    from tunegrab.models import Job, TaskStatus, TrackTask
+    from tunegrab.video import VideoEntry, VideoOptions
+
+    job = Job(input="https://youtu.be/dQw4w9WgXcQ", format="opus")
+    task = TrackTask(track=make_track(1), position=1, status=TaskStatus.FAILED)
+    job.tasks = [task]
+    job.finished_at = job.created_at
+    entry = VideoEntry("dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ", "Song", "Chan", 213)
+    manager.jobs[job.id] = job
+    manager.video_jobs[job.id] = (VideoOptions(mode="audio"), {task.id: entry})
+    monkeypatch.setattr(manager, "_spawn", lambda coro: coro.close())
+    assert client.post(f"/api/jobs/{job.id}/retry").status_code == 202
+    assert used == ["opus"]
+
+
+def test_failed_video_survives_a_restart_and_shows_in_library(
+    services: FakeServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tunegrab import video
+    from tunegrab.download.ytdlp import DownloadError
+    from tunegrab.video import VideoEntry, VideoProbe
+
+    entry = VideoEntry("dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ", "Song", "Chan", 213)
+    monkeypatch.setattr(
+        web_jobs,
+        "probe",
+        lambda url, cookies=None: VideoProbe(url, "video", "Song", "Chan", "Youtube", [entry]),
+    )
+    attempts: list[str] = []
+
+    def flaky(self: Any, url: str, dest: Path, progress: Any = None, cancel: Any = None):  # type: ignore[no-untyped-def]
+        attempts.append(url)
+        if len(attempts) == 1:
+            raise DownloadError("Video unavailable")
+        dest.mkdir(parents=True, exist_ok=True)
+        out = dest / f"x.{self.extension}"
+        out.write_bytes(b"v")
+        return out, "720p H.264", False
+
+    monkeypatch.setattr(video.VideoDownloader, "download", flaky)
+    services.settings = services.settings.model_copy(update={"retries": 0})
+    base = "http://127.0.0.1:8765"
+    with TestClient(create_app(services=services), base_url=base) as first:
+        created = first.post("/api/video", json={"url": entry.url}).json()
+        failed = wait_for(first, created["id"], ("finished",))
+        assert failed["counts"]["failed"] == 1 and failed["kind"] == "video"
+        fix = f"/api/jobs/{created['id']}/tasks/{failed['tasks'][0]['id']}/fix"
+        refused = first.post(fix, json={"youtube_url": "dQw4w9WgXcQ"})
+        assert refused.status_code == 409 and "Retry" in refused.json()["detail"]
+    with TestClient(create_app(services=services), base_url=base) as second:  # restarted
+        assert second.get("/api/system").json()["failures"] == 1
+        retried = second.post("/api/failures/retry")
+        assert retried.status_code == 202 and retried.json()["name"] == "Retry failed videos"
+        assert wait_for(second, retried.json()["id"], ("finished",))["counts"]["done"] == 1
+        assert second.get("/api/system", params={"fresh": True}).json()["failures"] == 0
+        [saved] = second.get("/api/library").json()["videos"]
+        assert saved["title"] == "Song" and saved["mode"] == "video" and saved["exists"]
+        opened: list[Path] = []
+        monkeypatch.setattr(web_app, "open_in_file_manager", opened.append)
+        assert second.post("/api/open", json={"path": saved["path"]}).status_code == 200
+        # the same link again is skipped, not downloaded twice
+        again = second.post("/api/video", json={"url": entry.url}).json()
+        assert wait_for(second, again["id"], ("finished",))["counts"]["skipped"] == 1
+    assert len(attempts) == 2
+
+
 def test_events_are_published(client: TestClient) -> None:
     manager = client.app.state.manager  # type: ignore[attr-defined]
     queue = manager.subscribe()
@@ -118,7 +361,21 @@ def test_settings_roundtrip(client: TestClient, services: FakeServices, tmp_path
     assert client.get("/api/library").json()["root"] == str(new_dir)
     # blank resets to default
     client.post("/api/settings", json={"format": ""})
-    assert services.settings.format == "mp3" and "format" not in read_config_file()
+    assert services.settings.format == "m4a" and "format" not in read_config_file()
+
+
+def test_youtube_sign_in_is_off_by_default_and_reaches_yt_dlp(
+    client: TestClient, services: FakeServices
+) -> None:
+    assert client.get("/api/settings").json()["values"]["cookies_from_browser"] is None
+    saved = client.post("/api/settings", json={"cookies_from_browser": "Firefox"}).json()
+    assert saved["values"]["cookies_from_browser"] == "firefox"
+    assert read_config_file()["cookies_from_browser"] == "firefox"
+    real = Services.pipeline(services)  # the real yt-dlp downloader, not the fake
+    assert real.downloader.cookies_from_browser == "firefox"  # type: ignore[attr-defined]
+    client.post("/api/settings", json={"cookies_from_browser": ""})
+    assert services.settings.cookies_from_browser is None
+    assert "cookies_from_browser" not in read_config_file()
 
 
 @pytest.mark.parametrize(
@@ -128,28 +385,100 @@ def test_settings_roundtrip(client: TestClient, services: FakeServices, tmp_path
         {"format": "wav"},
         {"archive_path": "x"},
         {"track_template": "{nope}.{ext}"},
+        {"cookies_from_browser": "netscape"},
     ],
 )
 def test_settings_rejects_bad_values(client: TestClient, bad: dict[str, str]) -> None:
     assert client.post("/api/settings", json=bad).status_code == 400
 
 
-def test_open_only_inside_library(
+def test_settings_rejects_unusable_music_folders(
+    client: TestClient, services: FakeServices, tmp_path: Path
+) -> None:
+    before = services.settings.output_dir
+    blocker = tmp_path / "a file"
+    blocker.write_text("x")
+    for folder, reason in ((blocker, "can't save music there"), ("relative/music", "full folder")):
+        response = client.post("/api/settings", json={"output_dir": str(folder)})
+        detail = response.json()["detail"]
+        assert response.status_code == 400 and reason in detail["message"]
+        assert detail["field"] == "output_dir"
+    assert services.settings.output_dir == before
+
+
+def test_settings_errors_use_the_page_words(client: TestClient) -> None:
+    detail = client.post("/api/settings", json={"threads": "99"}).json()["detail"]
+    assert detail == {"message": "Songs at once can be at most 16", "field": "threads"}
+    detail = client.post("/api/settings", json={"track_template": "{nope}.{ext}"}).json()["detail"]
+    assert detail["field"] == "track_template"
+    assert "output_dir" not in read_config_file()
+
+
+def test_open_music_video_or_saved_files_only(
     client: TestClient, services: FakeServices, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     opened: list[Path] = []
     monkeypatch.setattr(web_app, "open_in_file_manager", opened.append)
     assert client.post("/api/open", json={}).status_code == 200  # creates + opens the root
     assert opened == [(tmp_path / "lib").resolve()]
-    assert client.post("/api/open", json={"path": str(tmp_path)}).status_code == 400
-    assert (
-        client.post("/api/open", json={"path": str(tmp_path / "lib" / "x.mp3")}).status_code == 404
-    )
+    elsewhere = tmp_path / "Videos elsewhere"
+    services.settings = services.settings.model_copy(update={"video_dir": elsewhere})
+    assert client.post("/api/open", json={"path": str(elsewhere)}).status_code == 200
+    # a file the archive knows, even outside today's music folder (folder changed since)
+    old = tmp_path / "old library" / "a,b.mp3"
+    old.parent.mkdir()
+    old.write_bytes(b"x")
+    services.archive.record_download(make_track(1), old, "x", "mp3")
+    assert client.post("/api/open", json={"path": str(old)}).status_code == 200
+    assert opened[-1] == old.resolve()
+    refused = client.post("/api/open", json={"path": str(tmp_path)})
+    assert refused.status_code == 400 and "music and video folders" in refused.json()["detail"]
+    missing = client.post("/api/open", json={"path": str(tmp_path / "lib" / "x.mp3")})
+    assert missing.status_code == 404
+
+
+def test_explorer_gets_one_quoted_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from tunegrab.web import desktop
+
+    song = tmp_path / "a,b.mp3"
+    song.write_bytes(b"x")
+    calls: list[Any] = []
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    monkeypatch.setattr(desktop.subprocess, "Popen", calls.append)
+    desktop.open_in_file_manager(song)
+    assert calls == [f'explorer /select,"{song}"']
 
 
 def test_pick_folder(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(web_app, "pick_folder", lambda initial: "D:/Music")
     assert client.post("/api/pick-folder").json() == {"path": "D:/Music"}
+
+
+def test_pick_folder_allows_one_window_at_a_time(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened, release = threading.Event(), threading.Event()
+
+    def slow_picker(initial: Path) -> str:
+        opened.set()
+        release.wait(5)
+        return "D:/Music"
+
+    monkeypatch.setattr(web_app, "pick_folder", slow_picker)
+    first: dict[str, Any] = {}
+    worker = threading.Thread(target=lambda: first.update(r=client.post("/api/pick-folder")))
+    worker.start()
+    assert opened.wait(5)
+    second = client.post("/api/pick-folder")
+    assert second.status_code == 409 and "already open" in second.json()["detail"]
+    release.set()
+    worker.join(5)
+    assert first["r"].json() == {"path": "D:/Music"}
+    # the lock is released afterwards, also when the picker fails
+    monkeypatch.setattr(web_app, "pick_folder", lambda initial: 1 / 0)
+    assert client.post("/api/pick-folder").status_code == 501
+    monkeypatch.setattr(web_app, "pick_folder", lambda initial: None)
+    assert client.post("/api/pick-folder").json() == {"path": None}
 
 
 def test_local_only_guard(services: FakeServices) -> None:
@@ -301,7 +630,7 @@ def test_video_link_browse_and_download(
         out.write_bytes(b"v")
         return out, "720p H.264 + AAC 130 kbps", False
 
-    monkeypatch.setattr(web_app, "probe", fake_probe)
+    monkeypatch.setattr(web_jobs, "probe", fake_probe)
     monkeypatch.setattr(video.VideoDownloader, "download", fake_download)
     clips: list[tuple[float | None, float | None]] = []
     monkeypatch.setattr(
@@ -340,3 +669,401 @@ def test_storage_endpoints(client: TestClient) -> None:
     assert client.post("/api/storage/clean", json={"keys": ["music"]}).status_code == 400
     done = client.post("/api/storage/clean", json={"keys": ["tmp", "logs"]}).json()
     assert [r["key"] for r in done["results"]] == ["tmp", "logs"]
+
+
+def test_unexpected_resolve_error_ends_the_job(
+    client: TestClient, services: FakeServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Any exception while resolving ends the job; it never sits in "resolving"."""
+    app_manager = client.app.state.manager  # type: ignore[attr-defined]
+
+    def broken(*_: Any) -> Any:
+        raise KeyError("tracks")
+
+    monkeypatch.setattr(app_manager, "_build", broken)
+    created = client.post("/api/jobs", json={"url": ALBUM}).json()
+    job = wait_for(client, created["id"], ("error",))
+    assert "Something unexpected went wrong (KeyError" in job["error"]
+    assert "log" in job["error"]
+    assert not app_manager.busy()
+
+
+def test_unexpected_video_probe_error_ends_the_job(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(url: str, cookies: str | None = None) -> Any:
+        raise TypeError("'NoneType' object is not subscriptable")
+
+    monkeypatch.setattr(web_jobs, "probe", broken)
+    created = client.post("/api/video", json={"url": "https://youtu.be/dQw4w9WgXcQ"}).json()
+    job = wait_for(client, created["id"], ("error",))
+    assert "TypeError" in job["error"]
+    assert not client.app.state.manager.busy()  # type: ignore[attr-defined]
+
+
+def test_crashing_pipeline_leaves_no_task_running(
+    client: TestClient, services: FakeServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tunegrab.pipeline import Pipeline
+
+    async def broken(self: Pipeline, job: Any) -> Any:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(Pipeline, "run", broken)
+    created = client.post("/api/jobs", json={"url": ALBUM}).json()
+    job = wait_for(client, created["id"], ("error",))
+    assert "RuntimeError: boom" in job["error"]
+    assert {t["status"] for t in job["tasks"]} == {"skipped"}
+    assert not client.app.state.manager.busy()  # type: ignore[attr-defined]
+
+
+def test_unusable_music_folder_ends_the_job_with_a_clear_message(
+    client: TestClient, services: FakeServices, tmp_path: Path
+) -> None:
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x")
+    services.settings = services.settings.model_copy(update={"output_dir": blocker / "music"})
+    created = client.post("/api/jobs", json={"url": ALBUM}).json()
+    job = wait_for(client, created["id"], ("error",))
+    assert job["error"].startswith("Your music folder") and "Settings" in job["error"]
+    assert not client.app.state.manager.busy()  # type: ignore[attr-defined]
+
+
+def test_startup_warnings_are_shown_and_dismissed(client: TestClient) -> None:
+    from tunegrab import config
+
+    config.startup_warnings.append("Your settings file couldn't be read.")
+    try:
+        assert client.get("/api/system").json()["warnings"] == [
+            "Your settings file couldn't be read."
+        ]
+        assert client.delete("/api/system/warnings").status_code == 200
+        assert client.get("/api/system").json()["warnings"] == []
+    finally:
+        config.startup_warnings.clear()
+
+
+def test_shutdown_waits_for_running_downloads(services: FakeServices) -> None:
+    """Stopping the server cancels the job and lets workers finish before the archive
+    closes (no 'closed database' errors, the cancellation is recorded)."""
+    import threading
+
+    block, started = threading.Event(), threading.Event()
+    services.downloader.block, services.downloader.started = block, started
+    with TestClient(create_app(services=services), base_url="http://127.0.0.1:8765") as client:
+        job_id = client.post("/api/jobs", json={"url": ALBUM}).json()["id"]
+        assert started.wait(5)
+        manager = client.app.state.manager  # type: ignore[attr-defined]
+    # leaving the block ran the shutdown: the job ended and the archive still worked for it
+    job = manager.jobs[job_id]
+    assert job.finished_at is not None and job.cancelled
+    assert all(t.status.finished for t in job.tasks)
+    assert services.archive.job_history()[0]["id"] == job_id
+
+
+# --- match review ---------------------------------------------------------------------
+
+
+@pytest.fixture
+def doubtful(services: FakeServices) -> Track:
+    """The album is one song whose best match is a live version, with two alternatives."""
+    track = make_track(1)
+    services.metadata.tracks = [track]
+    audio = FakeAudio(results={track.title: doubtful_candidates(track)})
+    services.matcher = Matcher([audio], cache=services.archive)
+    return track
+
+
+def eventually(check: Any) -> None:
+    deadline = time.monotonic() + 5
+    while not check():
+        assert time.monotonic() < deadline, "condition never became true"
+        time.sleep(0.02)
+
+
+def download_album(client: TestClient) -> dict[str, Any]:
+    return wait_for(
+        client, client.post("/api/jobs", json={"url": ALBUM}).json()["id"], ("finished",)
+    )
+
+
+def test_check_this_match_then_choose_another(
+    client: TestClient, services: FakeServices, doubtful: Track
+) -> None:
+    job = download_album(client)
+    [task] = job["tasks"]
+    review = task["review"]
+    assert "live" in review["note"] and review["match"]["video_id"] == LIVE_VIDEO
+    assert [a["video_id"] for a in review["alternatives"]] == [STUDIO_VIDEO, COVER_VIDEO]
+    shown = {"title", "channel", "duration_s", "score", "reason", "url"}
+    assert shown <= set(review["alternatives"][0])
+    [song] = client.get("/api/library").json()["tracks"]
+    assert song["review"] == review and song["key"] == task["key"] == doubtful.key
+
+    choose = "/api/review/choose"
+    assert client.post(choose, json={"key": song["key"]}).status_code == 400
+    unknown = client.post(choose, json={"key": song["key"], "video_id": "elsewhere00"})
+    assert unknown.status_code == 409 and "other matches" in unknown.json()["detail"]
+    gone = client.post(choose, json={"key": "nope", "video_id": STUDIO_VIDEO})
+    assert gone.status_code == 404
+
+    services.downloader.content[STUDIO_VIDEO] = b"studio"
+    chosen = client.post(choose, json={"key": song["key"], "video_id": STUDIO_VIDEO})
+    assert chosen.status_code == 202 and "another match" in chosen.json()["name"]
+    done = wait_for(client, chosen.json()["id"], ("finished",))
+    [swapped] = done["tasks"]
+    assert swapped["status"] == "done" and swapped["review"] is None
+    assert STUDIO_VIDEO in swapped["match"]["url"] and swapped["path"] == song["path"]
+    assert Path(song["path"]).read_bytes() == b"studio"  # same file name, new audio
+    [after] = client.get("/api/library").json()["tracks"]
+    assert after["review"] is None and after["path"] == song["path"]
+    # the row in the first download stops asking too
+    eventually(lambda: client.get(f"/api/jobs/{job['id']}").json()["tasks"][0]["review"] is None)
+    saved = services.archive.match_record(doubtful.key)
+    assert saved is not None and saved.manual and saved.candidate.video_id == STUDIO_VIDEO
+    # the earlier video stays on offer, so the swap can be undone
+    assert LIVE_VIDEO in [a.candidate.video_id for a in saved.alternatives]
+
+
+def test_failed_swap_keeps_the_song_and_can_be_retried(
+    client: TestClient, services: FakeServices, doubtful: Track
+) -> None:
+    services.settings = services.settings.model_copy(update={"retries": 0})
+    job = download_album(client)
+    path = Path(job["tasks"][0]["path"])
+    services.downloader.fail_times = 99
+    body = {"key": doubtful.key, "video_id": STUDIO_VIDEO}
+    failed = wait_for(
+        client, client.post("/api/review/choose", json=body).json()["id"], ("finished",)
+    )
+    assert failed["counts"]["failed"] == 1 and failed["retryable"] == 1
+    assert path.read_bytes() == b"audio"  # the old file is untouched
+    [song] = client.get("/api/library").json()["tracks"]
+    assert song["review"] is not None and song["exists"]
+    assert client.get("/api/system").json()["failures"] == 0  # not a missing song
+
+    services.downloader.fail_times = 0
+    services.downloader.content[STUDIO_VIDEO] = b"studio"
+    retried = client.post(f"/api/jobs/{failed['id']}/retry")
+    assert retried.status_code == 202
+    again = wait_for(client, retried.json()["id"], ("finished",))
+    assert again["counts"]["done"] == 1 and STUDIO_VIDEO in again["tasks"][0]["match"]["url"]
+    assert path.read_bytes() == b"studio"
+    assert client.get("/api/library").json()["tracks"][0]["review"] is None
+
+
+def test_keep_this_match(client: TestClient, services: FakeServices, doubtful: Track) -> None:
+    job = download_album(client)
+    assert job["tasks"][0]["review"] is not None
+    assert client.post("/api/review/keep", json={"key": "nope"}).status_code == 404
+    kept = client.post("/api/review/keep", json={"key": doubtful.key})
+    assert kept.status_code == 200
+    assert client.get("/api/library").json()["tracks"][0]["review"] is None
+    assert client.get(f"/api/jobs/{job['id']}").json()["tasks"][0]["review"] is None
+    assert services.archive.is_manual_match(doubtful.key)
+    # downloading the song again doesn't bring the question back
+    Path(job["tasks"][0]["path"]).unlink()
+    again = download_album(client)
+    assert again["tasks"][0]["status"] == "done" and again["tasks"][0]["review"] is None
+
+
+def test_sure_matches_have_no_review(client: TestClient) -> None:
+    job = download_album(client)
+    assert all(t["review"] is None for t in job["tasks"])
+    tracks = client.get("/api/library").json()["tracks"]
+    assert all(t["review"] is None and t["source"] == "Opus 129 kbps" for t in tracks)
+    assert not any(t["low_quality"] for t in tracks)
+
+
+# --- playlist sync --------------------------------------------------------------------
+
+PLAYLIST = f"https://open.spotify.com/playlist/{PLAYLIST_ID}"
+SYNC, REMOVED = "/api/playlists/sync", "/api/playlists/removed"
+
+
+def download_playlist(client: TestClient, services: FakeServices, numbers: list[int]) -> None:
+    services.metadata.tracks = [make_track(n) for n in numbers]
+    wait_for(client, client.post("/api/jobs", json={"url": PLAYLIST}).json()["id"], ("finished",))
+
+
+def test_playlist_sync_downloads_new_songs_and_lists_removed_ones(
+    client: TestClient, services: FakeServices
+) -> None:
+    download_playlist(client, services, [1, 2, 3])
+    [saved] = client.get("/api/library").json()["playlists"]
+    assert saved["playlist_id"] == PLAYLIST_ID and saved["removed"] == 0 and not saved["csv"]
+
+    services.metadata.tracks = [make_track(1), make_track(4)]  # 2 and 3 left, 4 is new
+    synced = client.post(SYNC, json={"id": PLAYLIST_ID})
+    assert synced.status_code == 202
+    body = synced.json()
+    assert body["new"] == 1 and body["complete"] and body["name"] == "Fake Playlist"
+    assert [(g["title"], g["state"]) for g in body["gone"]] == [
+        ("Song 2", "file"),
+        ("Song 3", "file"),
+    ]
+    assert all(Path(g["path"]).is_file() for g in body["gone"])
+    job = wait_for(client, body["job"]["id"], ("finished",))
+    assert job["counts"]["done"] == 1 and job["counts"]["skipped"] == 1
+    library = client.get("/api/library").json()
+    assert len(library["tracks"]) == 4 and all(t["exists"] for t in library["tracks"])
+    assert library["playlists"][0]["removed"] == 2 and library["playlists"][0]["tracks"] == 2
+    listed = client.get(REMOVED, params={"id": PLAYLIST_ID}).json()
+    assert listed["gone"] == body["gone"] and listed["name"] == "Fake Playlist"
+
+    # nothing is deleted without the confirm flag, or without naming the songs
+    keys = [g["key"] for g in body["gone"]]
+    paths = [Path(g["path"]) for g in body["gone"]]
+    assert (
+        client.post(f"{REMOVED}/delete", json={"id": PLAYLIST_ID, "keys": keys}).status_code == 400
+    )
+    unnamed = client.post(f"{REMOVED}/delete", json={"id": PLAYLIST_ID, "confirm": True})
+    assert unnamed.status_code == 400 and all(p.is_file() for p in paths)
+
+    deleted = client.post(
+        f"{REMOVED}/delete", json={"id": PLAYLIST_ID, "keys": keys[:1], "confirm": True}
+    ).json()
+    assert deleted["deleted"] == [str(paths[0])] and deleted["failed"] == []
+    assert not paths[0].exists() and paths[1].is_file()
+    assert [g["key"] for g in deleted["gone"]] == keys[1:]
+
+    assert client.post(f"{REMOVED}/keep", json={"id": PLAYLIST_ID}).json() == {"gone": []}
+    assert paths[1].is_file()  # kept, and no longer listed
+    after = client.get("/api/library").json()
+    assert after["playlists"][0]["removed"] == 0 and len(after["tracks"]) == 3
+
+    for url in (SYNC, f"{REMOVED}/keep", f"{REMOVED}/delete"):
+        assert client.post(url, json={"id": "nope", "confirm": True}).status_code == 404
+    assert client.get(REMOVED, params={"id": "nope"}).status_code == 404
+
+
+def test_playlist_sync_ignores_a_partial_listing(
+    client: TestClient, services: FakeServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    download_playlist(client, services, [1, 2, 3])
+
+    def first_only(playlist_id: str) -> Collection:
+        return Collection(
+            kind="playlist", id=playlist_id, name="Fake Playlist", tracks=[make_track(1)], total=3
+        )
+
+    monkeypatch.setattr(services.metadata, "get_playlist", first_only)
+    body = client.post(SYNC, json={"id": PLAYLIST_ID}).json()
+    assert not body["complete"] and (body["listed"], body["total"]) == (1, 3)
+    assert body["gone"] == []  # songs 2 and 3 are not "removed": they just weren't listed
+    wait_for(client, body["job"]["id"], ("finished",))
+    assert client.get("/api/library").json()["playlists"][0]["removed"] == 0
+
+
+def test_playlist_sync_waits_for_a_running_download(
+    client: TestClient, services: FakeServices
+) -> None:
+    download_playlist(client, services, [1])
+    services.metadata.tracks = [make_track(1), make_track(2)]
+    services.downloader.block = threading.Event()
+    first = client.post(SYNC, json={"id": PLAYLIST_ID})
+    assert first.status_code == 202
+    second = client.post(SYNC, json={"id": PLAYLIST_ID})
+    assert second.status_code == 409 and "already" in second.json()["detail"]
+    services.downloader.block.set()
+    wait_for(client, first.json()["job"]["id"], ("finished",))
+
+
+def test_csv_playlist_sync_asks_for_the_new_file(client: TestClient) -> None:
+    head = "Track Name,Artist Name(s),Track Duration (ms)\n"
+    first = head + "Song One,Fake Artist,200000\nSong Two,Fake Artist,200000\n"
+    created = client.post("/api/jobs", json={"csv_text": first, "name": "My Mix"})
+    wait_for(client, created.json()["id"], ("finished",))
+    [saved] = client.get("/api/library").json()["playlists"]
+    assert saved["csv"] and saved["playlist_id"] == "csv:my-mix"
+
+    missing = client.post(SYNC, json={"id": "csv:my-mix"})
+    assert missing.status_code == 400 and "CSV" in missing.json()["detail"]
+    empty = client.post(SYNC, json={"id": "csv:my-mix", "csv_text": "nothing,useful\n1,2\n"})
+    assert empty.status_code == 400
+
+    second = head + "Song One,Fake Artist,200000\nSong Three,Fake Artist,200000\n"
+    body = client.post(SYNC, json={"id": "csv:my-mix", "csv_text": second}).json()
+    assert body["new"] == 1 and body["name"] == "My Mix"
+    assert [(g["title"], g["state"]) for g in body["gone"]] == [("Song Two", "file")]
+    job = wait_for(client, body["job"]["id"], ("finished",))
+    assert job["counts"]["done"] == 1 and job["counts"]["skipped"] == 1
+    assert len(client.get("/api/library").json()["tracks"]) == 3  # nothing deleted
+
+
+def test_library_shows_what_youtube_served(client: TestClient, services: FakeServices) -> None:
+    poor = make_track(2)
+    assert poor.spotify_id is not None
+    services.downloader.low_quality.add(poor.spotify_id[-11:])  # the fake match's video ID
+    job = download_album(client)
+    by_title = {t["title"]: t for t in job["tasks"]}
+    assert by_title["Song 2"]["low_quality"] and "low quality" in by_title["Song 2"]["source"]
+    library = {t["title"]: t for t in client.get("/api/library").json()["tracks"]}
+    assert (library["Song 1"]["source"], library["Song 1"]["low_quality"]) == (
+        "Opus 129 kbps",
+        False,
+    )
+    # the label is the plain source; the flag carries "low quality"
+    assert (library["Song 2"]["source"], library["Song 2"]["low_quality"]) == ("AAC 96 kbps", True)
+    assert library["Song 2"]["format"] == "mp3"
+
+
+def test_page_follows_the_cut_list(client: TestClient) -> None:
+    page, script = client.get("/").text, client.get("/app.js").text
+    # the format picker's first option is filled in with the saved default ("M4A (default)")
+    assert 'id="format-default"' in page and "showDefaultFormat(values.format)" in script
+    # uv's package cache is a CLI-only option (tunegrab clean --uv-cache)
+    assert "package cache" not in page
+    assert "uv_cache" not in script and "st-uv" not in script
+    # no inline styles: spacing and colour come from app.css
+    assert 'style="' not in page
+
+
+def test_progress_events_skip_the_job_summary(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = 0
+    original = web_jobs.job_summary
+
+    def counting(job: Any) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        return original(job)
+
+    monkeypatch.setattr(web_jobs, "job_summary", counting)
+    job = download_album(client)
+    # a few per song (it finishing) plus a handful per job, not one per progress event
+    assert calls <= 4 * len(job["tasks"]) + 10
+
+
+def test_selected_songs_are_looked_up_in_parallel(
+    client: TestClient, services: FakeServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tracks = [make_track(i) for i in range(1, 13)]
+    services.metadata.tracks = tracks
+    original = services.metadata.get_track
+
+    def slow(track_id: str) -> Track:
+        time.sleep(0.2)
+        return original(track_id)
+
+    monkeypatch.setattr(services.metadata, "get_track", slow)
+    ids = [t.spotify_id for t in tracks] + ["0000000000000000000000"]  # one that doesn't exist
+    started = time.monotonic()
+    job = wait_for(
+        client,
+        client.post("/api/jobs", json={"spotify_tracks": ids, "name": "Picks"}).json()["id"],
+        ("finished",),
+    )
+    assert time.monotonic() - started < 1.5  # 12 x 0.2 s one by one would be 2.4 s
+    assert [t["title"] for t in job["tasks"]] == [t.title for t in tracks]  # order kept
+    assert job["warnings"] == ["1 of the selected songs couldn't be found."]
+
+
+def test_finished_jobs_leave_nothing_behind(client: TestClient) -> None:
+    manager = client.app.state.manager  # type: ignore[attr-defined]
+    for _ in range(3):
+        download_album(client)
+    assert manager._last_sent
+    client.delete("/api/jobs/finished")
+    assert not manager.jobs and not manager._last_sent and not manager.pipelines

@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 
 from tunegrab import __version__
+from tunegrab.errors import TuneGrabError
 
 log = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 MAX_RETRY_AFTER_S = 120.0
 
 
-class NetworkError(Exception):
+class NetworkError(TuneGrabError):
     """A request could not be completed even after retrying."""
 
 

@@ -321,3 +321,65 @@ def test_run_all_covers_every_check(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         "Output dir writable",
         "Spotify credentials",
     ]
+
+
+# --- updating yt-dlp ---------------------------------------------------------
+
+
+def test_update_commands_upgrade_the_lock_in_a_uv_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`uv run --locked` re-syncs the venv to uv.lock, so the lock itself must move."""
+    (tmp_path / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    (tmp_path / "uv.lock").write_text("", encoding="utf-8")
+    monkeypatch.setattr(doctor.sys, "prefix", str(tmp_path / ".venv"))
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: "uv")
+    lock, sync = doctor.update_commands()
+    assert lock[:2] == ["uv", "lock"]
+    assert lock[2:4] == ["--upgrade-package", "yt-dlp"]
+    assert "yt-dlp-ejs" in lock
+    assert lock[-2:] == ["--directory", str(tmp_path)]
+    assert sync[:2] == ["uv", "sync"]
+    # never reinstall tunegrab itself (a running server locks tunegrab.exe) or add dev tools
+    assert {"--no-install-project", "--inexact", "--no-dev"} <= set(sync)
+
+
+def test_update_commands_without_a_uv_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(doctor.sys, "prefix", str(tmp_path / "venv"))
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: "uv")
+    assert doctor.update_commands() == [
+        ["uv", "pip", "install", "--python", doctor.sys.executable, "--upgrade", "yt-dlp[default]"]
+    ]
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
+    assert doctor.update_commands() == [
+        [doctor.sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp[default]"]
+    ]
+
+
+def test_update_ytdlp_stops_at_the_first_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(doctor, "update_commands", lambda: [["first"], ["second"]])
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return _completed(stderr="lock failed", code=1)
+
+    monkeypatch.setattr(doctor.subprocess, "run", run)
+    ok, output = doctor.update_ytdlp()
+    assert not ok
+    assert "lock failed" in output
+    assert calls == [["first"]]
+
+
+def test_update_ytdlp_reports_a_missing_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(doctor, "update_commands", lambda: [["uv", "lock"]])
+
+    def run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError("uv")
+
+    monkeypatch.setattr(doctor.subprocess, "run", run)
+    ok, output = doctor.update_ytdlp()
+    assert not ok
+    assert output.startswith("uv lock:")

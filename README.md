@@ -4,27 +4,47 @@
 
 # TuneGrab
 
-**Pick the albums and songs you want from Spotify, and get a tidy, fully tagged music library on your own drive.**
-<br>Plus videos and clips from YouTube and other sites.
+**Pick albums, playlists and songs from Spotify. Get a tidy, fully tagged music library on your own drive.**
 
-![Version](https://img.shields.io/badge/version-0.4.1-22c55e)
-![Python](https://img.shields.io/badge/python-3.11%2B-3776ab)
+[![CI](https://github.com/HAVEKAUTION/tunegrab/actions/workflows/ci.yml/badge.svg)](https://github.com/HAVEKAUTION/tunegrab/actions/workflows/ci.yml)
 ![Platforms](https://img.shields.io/badge/runs%20on-Windows%20%7C%20macOS%20%7C%20Linux-555)
-![Local only](https://img.shields.io/badge/runs-100%25%20local-0ea5e9)
-![Tests](https://img.shields.io/badge/tests-394%20passing-22c55e)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
-
-[Features](#-features) · [Videos](#-videos-and-clips) · [Install](#-install) · [Using the app](#%EF%B8%8F-using-the-app) · [Command line](#-command-line) · [Settings](#%EF%B8%8F-settings) · [FAQ](#-faq) · [Troubleshooting](#-troubleshooting)
 
 <img src="docs/images/demo.gif" alt="Typing an artist into TuneGrab, ticking two albums into the queue, then pasting a YouTube link to download a clip" width="900">
 
-**Windows:** `irm https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/install.ps1 | iex` · [other ways](#-install)
-
 </div>
+
+## What it does
+
+- **Browse, then download.** Type an artist or paste a Spotify link, tick the albums or songs you want.
+- **Tagged files, sorted for you.** `Artist/Album (Year)/01 - Title.m4a`, with cover art and lyrics.
+- **Never twice.** It remembers what you have, and checks matches it wasn't sure about.
+- **Videos too.** Paste a YouTube link to save the video, a clip of it, or just the audio.
+
+Everything runs on your computer. Spotify is only read for track details; the audio comes
+from YouTube.
+
+## Get started (Windows)
+
+Open PowerShell and paste:
+
+```powershell
+irm https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/install.ps1 | iex
+```
+
+It installs what it needs, adds TuneGrab to the Start menu and opens it. Run the same line
+again to update. macOS, Linux and manual installs are under **Install** below.
+
+Then: **type an artist → tick what you want → Download.** That's it.
 
 ---
 
-## How it works
+Everything else is folded away below. Open what you need.
+
+<details>
+<summary><b>How it works</b></summary>
+
+<br>
 
 ```
  Spotify link or artist name
@@ -33,12 +53,12 @@
  ① Resolve   read the track list and details from Spotify (metadata only)
  ② Match     find each song on YouTube Music / YouTube and score the candidates
  ③ Download  fetch the audio with yt-dlp
- ④ Convert   MP3, M4A, Opus or FLAC with ffmpeg
+ ④ Convert   M4A (original audio), Opus, MP3 or FLAC with ffmpeg
  ⑤ Tag       title, artists, album, track no., year, ISRC, cover art, lyrics
  ⑥ Archive   remember it, so it's never downloaded twice
           │
           ▼
- Artist/Album (Year)/01 - Title.mp3
+ Artist/Album (Year)/01 - Title.m4a
 ```
 
 Everything runs on your own computer. Spotify is used **only** for track information; the
@@ -47,16 +67,21 @@ audio comes from YouTube. TuneGrab never touches Spotify's own audio streams.
 Paste a **YouTube (or other video) link** instead and TuneGrab saves the video as an MP4,
 just a clip of it, or only its audio.
 
----
+</details>
 
-## ✨ Features
+<details>
+<summary><b>Features in detail</b></summary>
 
-<details open>
-<summary><b>🔎 Browse before you download</b></summary>
+<br>
+
+<details>
+<summary><b>Browse before you download</b></summary>
 
 <br>
 
 - Type an artist's name or paste any Spotify **artist, album, playlist or track** link.
+- Type anything else, like `Discovery Daft Punk` or `One More Time`, to see matching
+  albums and songs from YouTube Music and tick the ones you want.
 - See an artist's albums and singles as a cover grid, with **All / Albums / Singles & EPs** filters.
 - **Full discography:** Spotify's public page lists only the newest 8 albums and 8 singles,
   so TuneGrab loads the complete list from YouTube Music.
@@ -67,7 +92,7 @@ just a clip of it, or only its audio.
 </details>
 
 <details>
-<summary><b>🧺 One queue for everything</b></summary>
+<summary><b>One queue for everything</b></summary>
 
 <br>
 
@@ -81,7 +106,7 @@ just a clip of it, or only its audio.
 </details>
 
 <details>
-<summary><b>⬇️ Live downloads you can trust</b></summary>
+<summary><b>Live downloads you can trust</b></summary>
 
 <br>
 
@@ -101,21 +126,22 @@ just a clip of it, or only its audio.
 </details>
 
 <details>
-<summary><b>🏷️ Properly tagged files</b></summary>
+<summary><b>Properly tagged files</b></summary>
 
 <br>
 
 - Title, artists, album, album artist, track and disc number, year, ISRC and genre where available.
 - Embedded **cover art**.
 - **Lyrics** from LRCLIB (free, no account), embedded in the file, plus an optional synced `.lrc` file.
-- Choose **MP3** (128–320 kbps), **M4A**, **Opus** or **FLAC**.
+- **M4A** by default: YouTube's original audio, not re-encoded. Or **Opus**, **MP3**
+  (VBR V0 or 128–320 kbps) or **FLAC**.
 - Windows-safe file names, with your own naming pattern if you want one.
 - Playlists also get an `.m3u8` playlist file (or their own folder).
 
 </details>
 
 <details>
-<summary><b>🎯 Smart matching</b></summary>
+<summary><b>Smart matching</b></summary>
 
 <br>
 
@@ -127,38 +153,50 @@ just a clip of it, or only its audio.
   Latin accents are folded (Beyoncé = Beyonce).
 - When two results score the same, YouTube's own ranking decides.
 - Songs that score below the threshold (default 70) are flagged instead of downloaded wrongly.
-- Fix a bad match once (**Use a YouTube link** in the app, or `tunegrab fix`) and
-  TuneGrab remembers it.
+- A match TuneGrab isn't sure about (score under 85, or a "live" / "remix" / "cover" video for
+  a plain song) is downloaded but marked **Check this match**: open it to compare the other
+  candidates, listen, and swap with one click. The old file is replaced only once the new
+  one is ready.
+- Fix a bad match once (**Check this match** or **Use a YouTube link** in the app, or
+  `tunegrab fix`) and TuneGrab remembers it.
 
 </details>
 
 <details>
-<summary><b>📚 Library</b></summary>
+<summary><b>Library</b></summary>
 
 <br>
 
 - Everything you've downloaded, grouped by artist and album, with covers.
 - Instant filter by title, artist or album (fast even with thousands of songs).
 - **Show** opens a song's folder; flags files you've moved or deleted.
+- Each song shows what YouTube actually served ("MP3 · from Opus 129 kbps") and is marked
+  when only a low-quality source existed.
+- **Check for new songs** on a playlist downloads what was added and lists what left it.
+  Files of songs that left are deleted only if you tick them and confirm a list of every
+  file; songs another playlist still has are never deleted. For a CSV playlist, pick a newer
+  export of it.
 
 <img src="docs/images/library.jpg" alt="The Library screen listing an album with its cover art" width="800">
 
 </details>
 
 <details>
-<summary><b>🛡️ Private and safe by design</b></summary>
+<summary><b>Private and safe by design</b></summary>
 
 <br>
 
 - Runs only on your PC and listens only on `127.0.0.1`. Other websites can't talk to it.
 - No accounts, tracking, ads or crash reporting.
 - Optional Spotify credentials are kept in a git-ignored `.env` file or your system keyring.
+  TuneGrab reads `.env` only from its settings folder and its install folder, never from the
+  folder you happen to run it in.
 - Never decrypts Spotify audio.
 
 </details>
 
 <details>
-<summary><b>⌨️ Keyboard friendly</b></summary>
+<summary><b>Keyboard friendly</b></summary>
 
 <br>
 
@@ -173,9 +211,12 @@ just a clip of it, or only its audio.
 
 </details>
 
----
+</details>
 
-## 🎬 Videos and clips
+<details>
+<summary><b>Videos and clips</b></summary>
+
+<br>
 
 Paste a **YouTube** link (or one from any
 [site yt-dlp supports](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md))
@@ -184,15 +225,18 @@ or just a **clip** between two times. Playlists download every video.
 
 <img src="docs/images/video.jpg" alt="A YouTube video in TuneGrab with Video (MP4), 1080p and a clip from 0:43 to 1:10 selected" width="900">
 
----
+</details>
 
-## 📦 Install
+<details>
+<summary><b>Install: macOS, Linux, manual, updating, uninstalling</b></summary>
+
+<br>
 
 TuneGrab needs three free tools: **uv** (runs Python for you), **ffmpeg** (audio conversion)
 and **Deno** (YouTube needs it).
 
-<details open>
-<summary><b>🪟 Windows (recommended: about 5 minutes)</b></summary>
+<details>
+<summary><b>Windows (recommended: about 5 minutes)</b></summary>
 
 <br>
 
@@ -221,7 +265,7 @@ Run the same line again to update. [Read the script](install.ps1) first if you l
 </details>
 
 <details>
-<summary><b>🍎 macOS</b></summary>
+<summary><b>macOS</b></summary>
 
 <br>
 
@@ -236,7 +280,7 @@ uv run --no-dev tunegrab serve      # opens http://127.0.0.1:8765 in your browse
 </details>
 
 <details>
-<summary><b>🐧 Linux</b></summary>
+<summary><b>Linux</b></summary>
 
 <br>
 
@@ -253,7 +297,7 @@ uv run --no-dev tunegrab serve
 </details>
 
 <details>
-<summary><b>✅ Check everything is ready</b></summary>
+<summary><b>Check everything is ready</b></summary>
 
 <br>
 
@@ -269,7 +313,7 @@ it's out of date), your music folder and any Spotify credentials, and says what 
 </details>
 
 <details>
-<summary><b>💻 Install the command globally (optional)</b></summary>
+<summary><b>Install the command globally (optional)</b></summary>
 
 <br>
 
@@ -284,7 +328,7 @@ Stop TuneGrab first if it's running (Windows locks the program file while it run
 </details>
 
 <details>
-<summary><b>🔄 Updating</b></summary>
+<summary><b>Updating</b></summary>
 
 <br>
 
@@ -294,19 +338,20 @@ uv run tunegrab doctor --update   # update yt-dlp (do this whenever YouTube down
 ```
 
 Or in the app: **Settings → System → Update yt-dlp**, then restart TuneGrab. The launcher
-re-syncs everything else by itself on the next start.
+re-syncs everything else by itself on the next start. The app tells you when a new TuneGrab
+or yt-dlp is out (checked once a day; **Settings → Updates** turns it off).
 
 </details>
 
 <details>
-<summary><b>🧹 Disk space and uninstalling</b></summary>
+<summary><b>Disk space and uninstalling</b></summary>
 
 <br>
 
 Besides your music, TuneGrab keeps the app folder (about 50 MB) and its settings, history
 and logs in `%LOCALAPPDATA%\tunegrab` (a few MB). **Settings → Storage → Free up space**
-(or `tunegrab clean`) clears leftovers and can prune uv's shared package cache. Your music,
-settings and history stay.
+(or `tunegrab clean`) clears leftovers; `tunegrab clean --uv-cache` also prunes uv's shared
+package cache. Your music, settings and history stay.
 
 **Uninstall** (installed with the one-liner):
 
@@ -322,13 +367,16 @@ those too if you want them gone. Your music folder is never touched.
 
 </details>
 
----
+</details>
 
-## 🖱️ Using the app
+<details>
+<summary><b>Using the app: step-by-step guides</b></summary>
+
+<br>
 
 <img src="docs/images/get-music.jpg" alt="The Get music start screen with a search box and example artists" width="900">
 
-<details open>
+<details>
 <summary><b>Download a few albums from an artist</b></summary>
 
 <br>
@@ -348,8 +396,8 @@ those too if you want them gone. Your music folder is never touched.
 <br>
 
 Paste the Spotify link into **Get music** and press **Download now** to skip the preview, or
-**Browse** to see and pick the tracks first. For one song you can also type
-`Artist - Title` and press **Download now**.
+**Browse** to see and pick the tracks first. For one song you can also type its title
+(or `Artist - Title`) and press **Browse** to pick it from the results, or **Download now**.
 
 </details>
 
@@ -391,7 +439,9 @@ and so does a single **Track URI** column of Spotify links. From a terminal:
 - **Failed:** open **Downloads** and press **Retry failed songs**. Each failure shows its reason.
 - **Not found at all:** press **Use a YouTube link** under the failed song, paste the right
   video (there's a search link right in the dialog) and press **Download this one**.
-- **Wrong version downloaded:** run `tunegrab match <spotify-link>` to see the scores, then
+- **Wrong version downloaded:** songs TuneGrab had doubts about show **Check this match** in
+  Downloads and Library; pick another candidate there. For any other song, run
+  `tunegrab match <spotify-link>` to see the scores, then
   `tunegrab fix <spotify-track-link> <youtube-link>` to force the right video. TuneGrab
   remembers the fix for next time.
 
@@ -402,6 +452,8 @@ and so does a single **Track URI** column of Spotify links. From a terminal:
 
 <br>
 
+Music is saved to **Music\TuneGrab** in your user folder unless you pick another one.
+(If you used TuneGrab 0.4 or older, it keeps using the `downloads` folder it used before.)
 **Settings → Music folder → Choose…** opens a folder picker. Press **Save**. File naming,
 format, quality, lyrics and how many songs download at once are on the same screen.
 
@@ -409,9 +461,12 @@ format, quality, lyrics and how many songs download at once are on the same scre
 
 </details>
 
----
+</details>
 
-## 💻 Command line
+<details>
+<summary><b>Command line</b></summary>
+
+<br>
 
 Everything in the app is also available from a terminal (prefix with `uv run` unless you
 installed it globally).
@@ -455,9 +510,12 @@ Global flags: `--version`, `-v/--verbose` (logs always go to a rotating file too
 
 </details>
 
----
+</details>
 
-## ⚙️ Settings
+<details>
+<summary><b>Settings</b></summary>
+
+<br>
 
 <details>
 <summary><b>Where settings come from</b></summary>
@@ -465,20 +523,22 @@ Global flags: `--version`, `-v/--verbose` (logs always go to a rotating file too
 <br>
 
 From highest to lowest priority: **command-line flags → `TUNEGRAB_*` environment variables →
-`.env` → system keyring → config file → defaults.** Run `tunegrab config show` to see every
+`.env` (in the settings folder or the install folder) → system keyring → config file →
+defaults.** Run `tunegrab config show` to see every
 setting and where its value came from.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `output_dir` | `./downloads` | Music folder |
-| `format` | `mp3` | `mp3`, `m4a`, `opus` or `flac` |
-| `bitrate` | `320` | MP3 quality in kbps |
+| `output_dir` | `~/Music/TuneGrab` | Music folder (installs from 0.4.x keep their `downloads` folder) |
+| `format` | `m4a` | `m4a`, `opus`, `mp3` or `flac`. Profiles from before 0.5 keep `mp3` |
+| `bitrate` | — (V0) | MP3 only: unset is LAME VBR V0 (about 245 kbps); a number is constant kbps |
 | `threads` | `4` | Songs downloaded at once (1–16) |
 | `lyrics` / `lrc` | on / off | Embed lyrics / also write a synced `.lrc` |
 | `playlist_mode` | `m3u` | `m3u` playlist file, or `folder` per playlist |
 | `match_threshold` | `70` | Minimum match score (0–100) |
-| `cookies_from_browser` | — | e.g. `firefox`, for age-restricted videos |
+| `cookies_from_browser` | — (off) | `firefox`, `chrome`, `edge`, …: YouTube sign-in for age-restricted videos. YouTube can restrict the account used |
 | `video_quality` | `1080` | Highest video resolution: `best`, `2160` … `360` |
+| `check_updates` | `true` | Once a day, ask GitHub and PyPI whether a newer TuneGrab or yt-dlp is out |
 | `video_dir` | `<music folder>/Videos` | Where videos are saved |
 | `track_template` | see below | File naming pattern |
 
@@ -519,9 +579,12 @@ Full walkthrough: [`docs/SETUP.md`](docs/SETUP.md).
 
 </details>
 
----
+</details>
 
-## ❓ FAQ
+<details>
+<summary><b>FAQ</b></summary>
+
+<br>
 
 <details>
 <summary><b>Do I need a Spotify account or Premium?</b></summary>
@@ -529,7 +592,7 @@ Full walkthrough: [`docs/SETUP.md`](docs/SETUP.md).
 <br>
 
 No. Public links and artist names work with no account. Premium is only needed if you
-want to create your own Spotify developer app (see [Settings](#%EF%B8%8F-settings)).
+want to create your own Spotify developer app (see **Settings** above).
 
 </details>
 
@@ -549,9 +612,12 @@ your Spotify login.
 
 <br>
 
-YouTube audio is lossy (typically around 128–160 kbps Opus/AAC). **M4A** and **Opus** keep the
-original stream untouched. **MP3** and **FLAC** re-encode it for compatibility, but can't add
-quality that isn't there.
+YouTube audio is lossy (typically around 128–160 kbps Opus/AAC; 256 kbps with YouTube Premium
+and **Settings → YouTube sign-in**). **M4A** (the default) and **Opus** keep the original
+stream untouched; M4A plays on phones, cars and Windows, Opus makes the smallest files.
+**MP3** and **FLAC** re-encode it for old players, but can't add quality that isn't there.
+MP3 uses VBR V0 unless you pick a bitrate: it sounds the same as 320 kbps for YouTube audio
+and is smaller. If you used TuneGrab before 0.5, it stays on MP3 until you change it.
 
 TuneGrab skips YouTube's volume-levelled "stable volume" copy, retries when YouTube only
 offers a low-quality one, and flags any song that had to settle for it.
@@ -594,8 +660,19 @@ Yes. Downloads keep running as long as the launcher window is open. Reopen
 <br>
 
 Only requests to Spotify (track information), YouTube / YouTube Music (search and audio),
-LRCLIB (lyrics) and the image servers for cover art. There's no tracking or crash reporting.
-Logs stay on your PC (**Settings → About** shows where).
+LRCLIB (lyrics) and the image servers for cover art. Once a day TuneGrab also asks GitHub
+and PyPI for the newest TuneGrab and yt-dlp version numbers (turn it off in
+**Settings → Updates**, or `tunegrab config set check_updates false`); nothing about you or
+your music is sent. There's no tracking or crash reporting. Logs stay on your PC
+(**Settings → About** shows where).
+
+**Who can use the app on my PC?** The app has no password. Websites can't reach it, but any
+program running on your computer (and any other user signed in to it) can talk to
+`127.0.0.1:8765` and start downloads, change settings or open a folder. That's normal for a
+personal tool on your own computer; don't run it with `--host 0.0.0.0` on a shared network.
+
+**Is the installer safe?** From 0.6.0 each release carries a `SHA256SUMS` file, and the
+installer refuses a download whose checksum doesn't match.
 
 </details>
 
@@ -623,9 +700,12 @@ discography across several artists in one go.
 
 </details>
 
----
+</details>
 
-## 🧰 Troubleshooting
+<details>
+<summary><b>Troubleshooting</b></summary>
+
+<br>
 
 <details>
 <summary><b>YouTube downloads suddenly all fail</b></summary>
@@ -648,8 +728,18 @@ Also check Deno is installed (`deno --version`).
 
 <br>
 
-TuneGrab pauses downloads for a minute when YouTube asks this, then carries on. If it
-keeps happening, turn off any VPN, lower **Songs at once**, or use your browser's cookies:
+YouTube limits how many videos one connection can fetch (roughly 300 an hour without
+signing in). TuneGrab stays under that: big jobs start at full speed, then slow to about 250
+songs an hour. If YouTube still says "slow down", TuneGrab waits a minute, then two; the
+third time in a job it pauses for an hour (YouTube's block lasts about that long) and shows
+when it will continue, with a **Try now** button. After five it stops and leaves the songs
+for **Retry**.
+
+If it keeps happening, turn off any VPN. Signing in raises the limit, but YouTube can
+restrict the Google account used, so only do it with an account you can afford to lose
+access to: in **Settings → YouTube sign-in**, choose the browser you use YouTube in (Firefox
+works best; on Windows, Chromium browsers usually have to be closed and may not be readable).
+The same setting lets you download age-restricted videos. From the command line:
 
 ```powershell
 uv run tunegrab config set cookies_from_browser firefox
@@ -686,6 +776,9 @@ uv run tunegrab serve --port 8766
 
 <br>
 
+If the song shows **Check this match** (Downloads or Library), open it and press **Use this
+one** on the right video. Otherwise:
+
 ```powershell
 uv run tunegrab match <spotify-link>                       # see the scores
 uv run tunegrab fix <spotify-track-link> <youtube-link>    # force the right one
@@ -699,7 +792,7 @@ uv run tunegrab fix <spotify-track-link> <youtube-link>    # force the right one
 <br>
 
 That's the limit of Spotify's public pages. Add Spotify developer credentials (see
-[Settings](#%EF%B8%8F-settings)) to get the full playlist.
+**Settings** above) to get the full playlist.
 
 </details>
 
@@ -713,9 +806,12 @@ also see details in the terminal.
 
 </details>
 
----
+</details>
 
-## 🛠️ For developers
+<details>
+<summary><b>For developers</b></summary>
+
+<br>
 
 <details>
 <summary><b>Project layout, tests and tooling</b></summary>
@@ -748,16 +844,18 @@ Changes per version: [`CHANGELOG.md`](CHANGELOG.md).
 
 </details>
 
+</details>
+
 ---
 
-## 📌 Project status
+## Project status
 
 TuneGrab is a personal project, shared as-is. I fix what breaks for my own use and push those
 fixes here, but I don't take feature requests or offer support. Forks are welcome.
 
 ---
 
-## 📄 License
+## License
 
 TuneGrab is free software under the [GNU General Public License v3.0 or later](LICENSE).
 You can use, change and share it; if you share a changed version, it must stay under the same licence.

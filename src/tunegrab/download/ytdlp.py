@@ -25,6 +25,7 @@ from typing import Any, Literal, Protocol
 
 from tunegrab.config import AudioFormat
 from tunegrab.download.convert import extension, format_selector, postprocessors
+from tunegrab.errors import TuneGrabError
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ CLIENT_LADDER: tuple[tuple[str, ...] | None, ...] = (
     ("web_safari",),
 )
 LOW_QUALITY_FORMATS = frozenset({"18", "17", "36"})  # muxed low-res video formats
+LOW_QUALITY_NOTE = " (low quality source)"
 
 ErrorKind = Literal["unavailable", "rate_limited", "blocked", "other"]
 
@@ -85,12 +87,53 @@ def classify_error(message: str) -> ErrorKind:
     return "other"
 
 
-class DownloadError(Exception):
+class DownloadError(TuneGrabError):
     """yt-dlp could not fetch or convert the audio."""
 
     def __init__(self, message: str, kind: ErrorKind | None = None) -> None:
         super().__init__(message)
         self.kind: ErrorKind = kind or classify_error(message)
+
+
+# Shown when every player client was refused: almost always YouTube changed its player and
+# yt-dlp needs a release to catch up (02b_YOUTUBE_CONSTRAINTS.md, measure 1).
+BREAKAGE_HINT = "YouTube may have changed something: update yt-dlp in Settings, then press Retry."
+
+
+AGE_HINT = (
+    "This video is age-restricted, so YouTube only plays it when you're signed in. "
+    "Choose the browser you use YouTube in under YouTube sign-in in Settings, then press Retry."
+)
+COOKIES_HINT = (
+    "TuneGrab couldn't read the browser's YouTube sign-in. Close that browser and press "
+    "Retry, or choose Firefox under YouTube sign-in in Settings."
+)
+_AGE = re.compile(
+    r"sign in to confirm your age|age[- ]restricted|inappropriate for some users", re.IGNORECASE
+)
+_COOKIES = re.compile(
+    r"cookies? database|decrypt with dpapi|failed to decrypt|could not find .*cookies|"
+    r"failed to load cookies|unsupported browser specified for cookies",
+    re.IGNORECASE,
+)
+
+
+def describe_failure(exc: BaseException) -> str:
+    """The sentence shown for a failed download, with the fix when there is one."""
+    message = str(exc) or type(exc).__name__
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, DownloadError):
+            if current.kind == "blocked":
+                return f"YouTube refused this download ({current}). {BREAKAGE_HINT}"
+            if _COOKIES.search(str(current)):
+                return f"{COOKIES_HINT} ({current})"
+            if _AGE.search(str(current)):
+                return AGE_HINT
+        current = current.__cause__
+    return message
 
 
 class DownloadCancelled(DownloadError):
@@ -132,7 +175,7 @@ class SourceInfo:
 
     @property
     def label(self) -> str:
-        return self.plain_label + (" (low quality source)" if self.low_quality else "")
+        return self.plain_label + (LOW_QUALITY_NOTE if self.low_quality else "")
 
 
 SourceCallback = Callable[[SourceInfo], None]
@@ -324,8 +367,8 @@ def run_ladder(
 class YtDlpDownloader:
     def __init__(
         self,
-        fmt: AudioFormat = "mp3",
-        bitrate: int = 320,
+        fmt: AudioFormat = "m4a",
+        bitrate: int | None = None,
         cookies_from_browser: str | None = None,
         ladder: tuple[tuple[str, ...] | None, ...] = CLIENT_LADDER,
     ) -> None:

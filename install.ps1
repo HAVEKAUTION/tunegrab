@@ -17,7 +17,9 @@ param(
     [string]$Dir = (Join-Path $env:LOCALAPPDATA "Programs\TuneGrab"),
     [switch]$Uninstall,
     [switch]$NoStart,
-    [switch]$NoShortcuts
+    [switch]$NoShortcuts,
+    # Install from a zip on disk instead of downloading (used by scripts/test_install.ps1)
+    [string]$ZipPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -112,20 +114,39 @@ foreach ($tool in @("uv", "ffmpeg")) {
 }
 
 # --- 2. TuneGrab --------------------------------------------------------------------------
-try {
-    $release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ "User-Agent" = "tunegrab-installer" }
-    $tag = $release.tag_name
-    $zipUrl = "https://github.com/$Repo/archive/refs/tags/$tag.zip"
-} catch {
-    $tag = "main"
-    $zipUrl = "https://github.com/$Repo/archive/refs/heads/main.zip"
+# Releases from 0.6.0 on carry a zip and SHA256SUMS; the installer checks the zip against it.
+# Older releases (and no release at all) fall back to GitHub's source zip, as before.
+$sumsUrl = $null
+if ($ZipPath) {
+    $tag = "from $ZipPath"
+} else {
+    try {
+        $release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ "User-Agent" = "tunegrab-installer" }
+        $tag = $release.tag_name
+        $zipUrl = "https://github.com/$Repo/archive/refs/tags/$tag.zip"
+        $asset = $release.assets | Where-Object { $_.name -eq "tunegrab-$tag.zip" } | Select-Object -First 1
+        $sums = $release.assets | Where-Object { $_.name -eq "SHA256SUMS" } | Select-Object -First 1
+        if ($asset -and $sums) { $zipUrl = $asset.browser_download_url; $sumsUrl = $sums.browser_download_url }
+    } catch {
+        $tag = "main"
+        $zipUrl = "https://github.com/$Repo/archive/refs/heads/main.zip"
+    }
 }
 Say "Downloading TuneGrab $tag"
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("tunegrab-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory $tmp | Out-Null
 try {
     $zip = Join-Path $tmp "tunegrab.zip"
-    Invoke-WebRequest $zipUrl -OutFile $zip -UseBasicParsing
+    if ($ZipPath) { Copy-Item -LiteralPath $ZipPath -Destination $zip } else { Invoke-WebRequest $zipUrl -OutFile $zip -UseBasicParsing }
+    if ($sumsUrl) {
+        $line = (Invoke-RestMethod $sumsUrl -UseBasicParsing) -split "`n" | Where-Object { $_ -match "tunegrab-$([regex]::Escape($tag))\.zip" } | Select-Object -First 1
+        $expected = if ($line) { ($line -split '\s+')[0].ToLower() } else { "" }
+        $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+        if (-not $expected -or $expected -ne $actual) {
+            throw "The downloaded TuneGrab $tag doesn't match its published checksum. Nothing was changed; try again later."
+        }
+        Say "Checksum verified"
+    }
     Expand-Archive $zip -DestinationPath $tmp
     $source = Get-ChildItem $tmp -Directory | Select-Object -First 1
 

@@ -2,15 +2,129 @@
 
 All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
 
-## Unreleased
+## 0.6.0 — 2026-11-13
+
+No 0.5.0 was published; its changes are part of this release.
+
+### Added
+- **Light theme.** The app follows your system's light or dark setting. Both themes are
+  checked for readable contrast (WCAG AA) on every build.
+- **Check this match.** A song TuneGrab wasn't sure about (a match score under 85, or a video
+  that says "live", "remix", "cover" and the like when the song doesn't) is marked in Downloads
+  and Library. Open it to see the saved video and up to three other candidates with channel,
+  length, score and a Listen link. "Use this one" downloads that video and replaces the file
+  only once the new one is tagged and ready; "Keep the saved one" stops the question. Either
+  choice is remembered for the song.
+- **Playlist sync in the app.** Library → a playlist → **Check for new songs** downloads what
+  was added and lists the songs that left. Their files are deleted only after you tick them
+  and confirm a second screen naming every file; "Keep all files" dismisses the list. Songs
+  another playlist still has are never deleted. CSV playlists ask for a newer export.
+- **Search finds albums and songs.** Type an album or song ("Discovery Daft Punk", "One More
+  Time") to see matching albums and songs from YouTube Music and tick them into the queue. An
+  artist's name still opens the artist.
+- **Download now names the song it picked** ("One More Time – Daft Punk"); an artist's name
+  opens Browse instead of quietly downloading one of their songs.
+- **Videos are remembered**: video and audio-from-link downloads are in the download history,
+  shown in Library → Videos with Show, skipped when downloaded again with the same options,
+  and failed ones come back in "Retry failed" after a restart.
+- **Show in folder** on every saved song in Downloads.
+- **YouTube sign-in** in Settings (off by default): use a browser's YouTube cookies for
+  age-restricted videos (and 256 kbps audio with Premium), with a clear warning that YouTube
+  can restrict the account used. Age-restricted failures now point to it.
+- **Update notice**: once a day TuneGrab asks GitHub and PyPI whether a newer TuneGrab or
+  yt-dlp is out and shows a dismissible banner (Update yt-dlp is one click). Settings → Updates
+  turns it off.
+- **Library shows the source quality.** Each song lists what YouTube served next to its format
+  ("MP3 · from Opus 129 kbps") and is marked "Low quality source" when YouTube only had a poor
+  version. Songs downloaded before this version show their format only.
+
+### Security
+- `.env` is read only from TuneGrab's settings folder and install folder, no longer from
+  whatever folder `tunegrab` was started in (another project's `.env` could change settings).
+- Releases come with `SHA256SUMS`; the installer checks the zip against it (from 0.6.0).
+- README says plainly that the local app has no password and who can reach it.
 
 ### Fixed
+- `tunegrab clean` skips temporary download folders used in the last 30 minutes, so it can't
+  pull files from under a download running in the app.
+- The settings file says that TuneGrab rewrites it (comments added by hand are lost).
+- **Big libraries stay quick.** Library shows 400 songs at a time (whole artists) with
+  "Show 400 more songs"; filtering 10,000 songs went from up to 1.5 s per keystroke to under
+  60 ms. Picked songs and CSV rows that only have a Spotify ID are looked up six at a time,
+  and songs that can't be found are named in a warning instead of failing the download.
+- **Lost connection is shown.** If the page can't reach TuneGrab, a banner says so and the
+  sidebar stops claiming the tools are ready; it clears itself on reconnect.
+- **First run** explains what TuneGrab does, where music goes (with Change) and whether the
+  tools are installed; "Got it" hides it for good.
+- Settings errors use the page's words ("Songs at once can be at most 16") and focus the
+  field; a cut-off Spotify link says how to copy it again; unknown server errors point to
+  the log file instead of "Request failed (500)".
+- Library → Refresh stayed disabled after one click.
+- A link that couldn't be read ended with a green "0 downloaded" message. It now says it
+  couldn't start, and why.
+- The song panel's "Done" button sits at the bottom of the panel instead of under the list.
+- **`tunegrab sync --remove` could offer to delete songs that hadn't left the playlist.**
+  Without a Spotify login only the first 100 songs of a playlist can be read; the rest looked
+  "removed". When a playlist can't be read in full, sync (CLI and app) now says so and treats
+  no song as removed.
 - **The Windows installer could delete your music.** Updating (re-running the install line)
   mirrored the release over the install folder, which deleted the default music folder
   (`downloads`) and any `.env` kept there; `-Uninstall` deleted them too. The installer now
   replaces only its own files, records them in `.tunegrab-installed`, and uninstalling leaves
   everything else in place and lists it. Because the install line always fetches the newest
   `install.ps1`, this protects existing 0.4.1 installs on their next update.
+- A job can no longer hang in "running" forever: any unexpected error ends it with a plain
+  message, and one broken video no longer stops a video job.
+- Two songs that finish at the same moment and render to the same file name can't overwrite
+  each other; the second is saved as "name (2)".
+- A song listed twice in one playlist downloads once.
+- A missing music folder or a full disk stops the job once with a clear message (instead of
+  failing every song); Retry picks the songs up once fixed. Settings refuses a music folder
+  TuneGrab can't write to.
+- A broken settings file or download history no longer stops TuneGrab starting: it's set
+  aside with a dated name and the app says so. Your music files are untouched.
+- Stopping the server while downloading lets running songs end cleanly.
+- Songs already in your library are recognised from their tags even if the download history
+  was lost, instead of being downloaded again as "(2)" copies.
+- `tunegrab fix` keeps your old file until the replacement is downloaded; `sync --remove`
+  reports files it can't delete (e.g. open in a player); `login` network errors are a message.
+- Only one "Choose folder" window can be open at a time (a second one crashed the server).
+- Retry retries each failed song once, however many times it's clicked.
+- The Downloads page catches up after a lost connection or server restart, stays responsive
+  on 2,000-song jobs, and no longer shows a song stuck on "Downloading" after it finished.
+- Messages no longer send app users to the command line or `.env`.
+- Retrying a failed song (Retry, Retry failed after a restart, the link fix, video retries)
+  uses the format the job was started with, not the current default.
+- "Use a YouTube link" no longer appears on failed videos.
+- The queue bar says "1 song", not "1 songs"; Settings fields line up when only one has help.
+
+### Changed
+- Library rows are one line each (about 39 px): the artist is shown under a song only when it
+  differs from the heading it sits under. Playlist rows are tighter too.
+- The format picker on Get music names the default ("M4A (default)") instead of saying
+  "Default format".
+- Settings → Storage no longer offers to prune uv's package cache; `tunegrab clean --uv-cache`
+  still does.
+- **About** (Settings) now names the licence and links to the source.
+- A finished download's status pill carries the same tick as its songs; loading placeholders
+  pulse instead of sweeping a gradient.
+- Downloads are paced to stay under YouTube's limit: about 30 back to back, then 250 an hour
+  (1,000 with browser cookies). If YouTube still says "slow down" three times in a job,
+  TuneGrab pauses for an hour (the app shows when it continues, with a Try now button); after
+  five it stops and leaves the songs for Retry. Rate limits no longer use up a song's retries.
+- A song YouTube refuses with every player client now says "YouTube may have changed
+  something: update yt-dlp in Settings, then press Retry".
+- **New installs save music to `~/Music/TuneGrab`** and use **M4A** (YouTube's original
+  audio, no re-encode). Existing users keep their music folder and MP3: both are saved to the
+  settings file the first time this version runs.
+- MP3 without a chosen bitrate is now VBR V0 (about 245 kbps): sounds the same as 320 for
+  YouTube audio and is smaller. A chosen bitrate stays constant.
+- Format labels say what each one does: "M4A · original quality", "Opus · original quality,
+  smallest", "MP3 · re-encoded, for old players".
+- The download history upgrades itself (format 3) and keeps a copy of the old file
+  (`tunegrab.db.bak-v<n>`) first; a newer history than this version knows is refused.
+- Under the hood: one error type, a shared task runner for songs and videos, the web server
+  and page split into smaller files, dead code removed.
 
 ## 0.4.1 — 2026-11-13
 

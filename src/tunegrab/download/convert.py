@@ -12,10 +12,12 @@ from typing import Any
 from tunegrab.config import AudioFormat
 
 FORMAT_HELP = (
-    "mp3 (re-encoded, plays everywhere), m4a (original AAC, no re-encode), "
-    "opus (original Opus, no re-encode, best fidelity), flac (lossless container, "
-    "no quality gain). YouTube audio is ~128-160 kbps lossy whatever you pick."
+    "m4a (default: original quality, no re-encode, plays everywhere modern), "
+    "opus (original quality, smallest), mp3 (re-encoded, for old players), "
+    "flac (re-encoded into a bigger file, no better). YouTube audio is ~128-160 kbps "
+    "lossy whatever you pick."
 )
+VBR_V0 = "0"  # yt-dlp: a quality under 10 is VBR; 0 is LAME's best preset (V0)
 
 # "-drc" formats are YouTube's "stable volume" copies: dynamic range compressed, so worse
 # for music (yt-dlp#8259). They are only used when nothing else exists.
@@ -35,12 +37,13 @@ def format_selector(fmt: AudioFormat) -> str:
     return FORMAT_SELECTORS[fmt]
 
 
-def postprocessors(fmt: AudioFormat, bitrate: int) -> list[dict[str, Any]]:
+def postprocessors(fmt: AudioFormat, bitrate: int | None) -> list[dict[str, Any]]:
     """yt-dlp post-processor config. When the source codec already matches (AAC for
-    m4a, Opus for opus) FFmpegExtractAudio copies the stream instead of re-encoding."""
+    m4a, Opus for opus) FFmpegExtractAudio copies the stream instead of re-encoding.
+    MP3 is VBR V0 unless a bitrate was chosen (then constant)."""
     extract: dict[str, Any] = {"key": "FFmpegExtractAudio", "preferredcodec": fmt}
     if fmt == "mp3":
-        extract["preferredquality"] = str(bitrate)
+        extract["preferredquality"] = str(bitrate) if bitrate else VBR_V0
     return [extract]
 
 

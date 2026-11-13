@@ -1,23 +1,36 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from tests.fakes import (
+    COVER_VIDEO,
+    LIVE_VIDEO,
     PLAYLIST_ID,
+    STUDIO_VIDEO,
     FakeAudio,
     FakeDownloader,
     FakeTagger,
     candidate_for,
+    doubtful_candidates,
     make_pipeline,
     make_track,
 )
+from tunegrab.library.archive import Archive
 from tunegrab.library.playlists import read_m3u8
-from tunegrab.models import Job, TaskStatus, Track
-from tunegrab.pipeline import TMP_DIR_NAME, Pipeline
+from tunegrab.models import Collection, Job, Match, TaskStatus, Track, TrackTask
+from tunegrab.pacing import Pacer
+from tunegrab.pipeline import (
+    RATE_LIMIT_GAVE_UP,
+    RATE_LIMIT_GIVE_UP_AFTER,
+    TMP_DIR_NAME,
+    Pipeline,
+)
 
 PLAYLIST = f"https://open.spotify.com/playlist/{PLAYLIST_ID}"
 ALBUM = "spotify:album:4m2880jivSbbyEGAKfITCa"
@@ -124,7 +137,8 @@ def test_no_match_is_not_retried(tmp_path: Path) -> None:
     job = run(pipeline, ALBUM)
     task = job.tasks[0]
     assert task.status == TaskStatus.FAILED and task.attempts == 1
-    assert task.failed_stage == "matching" and "tunegrab fix" in (task.error or "")
+    assert task.failed_stage == "matching" and "no match above 70" in (task.error or "")
+    assert "tunegrab" not in (task.error or "")  # the app shows its own "Use a YouTube link"
     assert pipeline.downloader.calls == 0  # type: ignore[attr-defined]
 
 
@@ -204,6 +218,7 @@ def test_search_query_job(tmp_path: Path) -> None:
     )
     job = asyncio.run(pipeline.run(pipeline.build_job("Some Artist - Some Song")))
     assert job.collection is not None and job.collection.kind == "search"
+    assert job.name == f"{track.title} – {', '.join(track.artists)}"  # what it picked
     assert statuses(job) == [TaskStatus.DONE]
     assert pipeline.matcher.providers[0].calls == 0  # type: ignore[attr-defined]
     pipeline.query_lookup = lambda q: None
@@ -241,21 +256,269 @@ def test_unavailable_with_no_alternative_fails_without_retrying(tmp_path: Path) 
     assert "Video unavailable" in (task.error or "")
 
 
-def test_rate_limit_pauses_then_retries(tmp_path: Path) -> None:
-    downloader = FakeDownloader(rate_limited_times=1)
-    pipeline, _ = make_pipeline(tmp_path, tracks=[make_track(1)], downloader=downloader, retries=2)
+def test_rate_limit_pauses_then_retries_without_using_a_retry(tmp_path: Path) -> None:
+    downloader = FakeDownloader(rate_limited_times=2)
+    pipeline, _ = make_pipeline(tmp_path, tracks=[make_track(1)], downloader=downloader, retries=0)
     task = run(pipeline, ALBUM).tasks[0]
-    assert task.status == TaskStatus.DONE and task.attempts == 2
+    assert task.status == TaskStatus.DONE and task.attempts == 1
     assert pipeline._cooldown_strikes == 0  # reset by the successful download
 
 
-def test_rate_limit_cooldown_grows_and_is_capped(tmp_path: Path) -> None:
+def test_rate_limit_cooldown_grows_then_blocks_then_gives_up(tmp_path: Path) -> None:
     pipeline, _ = make_pipeline(tmp_path, tracks=[make_track(1)])
     pipeline.rate_limit_pause = 60.0
-    assert [pipeline._rate_limited() for _ in range(5)] == [60.0, 120.0, 240.0, 300.0, 300.0]
+    pipeline.rate_limit_block = 3600.0
+    job = Job(input="x")
+    assert [pipeline._rate_limited(job) for _ in range(4)] == [60.0, 120.0, 3600.0, 3600.0]
+    assert job.paused_until is not None and pipeline.abort_reason is None
+    assert pipeline._rate_limited(job) == 0.0
+    assert pipeline.abort_reason == RATE_LIMIT_GAVE_UP and pipeline.cancel_event.is_set()
+
+
+def test_hour_pause_can_be_ended_early(tmp_path: Path) -> None:
+    pipeline, _ = make_pipeline(tmp_path, tracks=[make_track(1)])
+    pipeline.rate_limit_block = 3600.0
+    job = Job(input="x")
+    assert pipeline.resume() is False  # nothing to resume
+    for _ in range(3):
+        pipeline._rate_limited(job)
+    assert job.paused_until is not None
+    assert pipeline.resume() is True
+    task = TrackTask(track=make_track(1), position=1)
+    pipeline._wait_for_cooldown(job, task)  # returns at once and clears the banner
+    assert job.paused_until is None
+
+
+def test_repeated_rate_limits_stop_the_job_and_leave_songs_retryable(tmp_path: Path) -> None:
+    downloader = FakeDownloader(rate_limited_times=99)
+    pipeline, archive = make_pipeline(
+        tmp_path, tracks=[make_track(1), make_track(2)], downloader=downloader, retries=3
+    )
+    job = run(pipeline, ALBUM)
+    # stopped knocking; the other song's thread may have been mid-attempt when it gave up
+    assert RATE_LIMIT_GIVE_UP_AFTER <= downloader.calls <= RATE_LIMIT_GIVE_UP_AFTER + 1
+    assert statuses(job) == [TaskStatus.FAILED, TaskStatus.FAILED]
+    assert job.error == RATE_LIMIT_GAVE_UP
+    assert len(archive.open_failures()) == 2
+
+
+def test_downloads_are_paced(tmp_path: Path) -> None:
+    clock = [0.0]
+    pacer = Pacer(3600, burst=1, clock=lambda: clock[0])  # one start per second
+    pipeline, _ = make_pipeline(tmp_path, tracks=[make_track(1), make_track(2)])
+    pipeline.pacer = pacer
+    waits: list[float] = []
+    pipeline.cancel_event = WaitRecorder(waits, clock)
+    job = run(pipeline, ALBUM)
+    assert statuses(job) == [TaskStatus.DONE, TaskStatus.DONE]
+    assert waits == [pytest.approx(1.0)]
+
+
+class WaitRecorder(threading.Event):
+    """A cancel event whose wait() advances a fake clock instead of sleeping."""
+
+    def __init__(self, waits: list[float], clock: list[float]) -> None:
+        super().__init__()
+        self.waits, self.clock = waits, clock
+
+    def wait(self, timeout: float | None = None) -> bool:
+        if timeout:
+            self.waits.append(timeout)
+            self.clock[0] += timeout
+        return self.is_set()
 
 
 def test_empty_tmp_folder_is_removed(tmp_path: Path) -> None:
     pipeline, _ = make_pipeline(tmp_path, tracks=[make_track(1)])
     run(pipeline, ALBUM)
     assert not (tmp_path / "lib" / TMP_DIR_NAME).exists()
+
+
+def test_duplicate_song_in_a_job_is_downloaded_once(tmp_path: Path) -> None:
+    song = make_track(1)
+    pipeline, _ = make_pipeline(tmp_path, tracks=[song, make_track(2), song], threads=4)
+    job = run(pipeline, ALBUM)
+    downloader = pipeline.downloader
+    assert isinstance(downloader, FakeDownloader) and downloader.calls == 2
+    assert statuses(job) == [TaskStatus.DONE, TaskStatus.DONE, TaskStatus.SKIPPED]
+    assert job.tasks[2].message == "already downloaded"
+    assert job.tasks[2].path == job.tasks[0].path
+    assert len(library_files(tmp_path)) == 2
+
+
+def _tag_library(pipeline: Pipeline, tmp_path: Path) -> None:
+    """Make the fake tagger 'read' the tags of the files now in the library."""
+    tagger = pipeline.tagger
+    assert isinstance(tagger, FakeTagger)
+    for path in library_files(tmp_path):
+        number = int(path.name[:2])
+        tagger.tags[path.name] = (f"Song {number}", f"Artist {number}")
+
+
+def test_songs_already_in_the_library_are_adopted_after_history_loss(tmp_path: Path) -> None:
+    pipeline, archive = make_pipeline(tmp_path)
+    run(pipeline, ALBUM)
+    _tag_library(pipeline, tmp_path)
+    for record in archive.all_downloads():
+        archive.forget_download(record.key)  # the history is gone, the files are not
+    job = run(pipeline, ALBUM)
+    assert statuses(job) == [TaskStatus.SKIPPED] * 3
+    assert {t.message for t in job.tasks} == {"already in your library"}
+    downloader = pipeline.downloader
+    assert isinstance(downloader, FakeDownloader) and downloader.calls == 3  # not 6
+    assert len(library_files(tmp_path)) == 3 and archive.stats()["downloads"] == 3
+
+
+def test_failed_history_write_keeps_the_song(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pipeline, archive = make_pipeline(tmp_path, tracks=[make_track(1)])
+    real = archive.record_download
+    calls = {"n": 0}
+
+    def flaky(*args: object, **kwargs: object) -> None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise sqlite3.OperationalError("database is locked")
+        real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(archive, "record_download", flaky)
+    job = run(pipeline, ALBUM)
+    assert statuses(job) == [TaskStatus.DONE]
+    assert job.tasks[0].message == "saved, but not added to the download history"
+    _tag_library(pipeline, tmp_path)
+    again = run(pipeline, ALBUM)
+    assert statuses(again) == [TaskStatus.SKIPPED]
+    assert [p.name for p in library_files(tmp_path)] == ["01 - Song 1.mp3"]  # no "(2)" copy
+
+
+class RefusedDownloader(FakeDownloader):
+    """Every player client was refused (what a YouTube player change looks like)."""
+
+    def download(self, video_id: str, dest_dir: Path, *args: object, **kwargs: object) -> Path:
+        from tunegrab.download.ytdlp import DownloadError
+
+        raise DownloadError("ERROR: [youtube] abc: n challenge solving failed")
+
+
+def test_refused_download_says_to_update_ytdlp(tmp_path: Path) -> None:
+    from tunegrab.download.ytdlp import BREAKAGE_HINT
+
+    pipeline, _ = make_pipeline(
+        tmp_path, tracks=[make_track(1)], downloader=RefusedDownloader(), retries=0
+    )
+    task = run(pipeline, ALBUM).tasks[0]
+    assert task.status == TaskStatus.FAILED
+    assert (task.error or "").startswith("YouTube refused this download (")
+    assert BREAKAGE_HINT in (task.error or "")
+
+
+# --- match review ---------------------------------------------------------------------
+
+
+def doubtful_pipeline(tmp_path: Path, **settings: Any) -> tuple[Pipeline, Archive, Track]:
+    """One song whose best match is a live version (score 70), with two alternatives."""
+    track = make_track(1)
+    audio = FakeAudio(results={track.title: doubtful_candidates(track)})
+    pipeline, archive = make_pipeline(tmp_path, tracks=[track], audio=audio, **settings)
+    return pipeline, archive, track
+
+
+def replacement_job(archive: Archive, track: Track, video_id: str) -> Job:
+    record, saved = archive.get_download(track.key), archive.match_record(track.key)
+    assert record is not None and saved is not None
+    picked = next(a for a in saved.alternatives if a.candidate.video_id == video_id)
+    match = Match(
+        track=track,
+        candidate=picked.candidate.model_copy(update={"source": "manual"}),
+        score=100,
+        reason="you chose this video",
+    )
+    task = TrackTask(track=track, position=1, match=match, replaces=str(record.path))
+    collection = Collection(kind="track", name=track.title, tracks=[track])
+    return Job(input=track.display, collection=collection, tasks=[task])
+
+
+def test_sure_matches_are_not_flagged(tmp_path: Path) -> None:
+    pipeline, archive = make_pipeline(tmp_path)
+    job = run(pipeline, ALBUM)
+    assert [t.review for t in job.tasks] == [None] * 3
+    assert all(r.review is None and r.source == "Opus 129 kbps" for r in archive.all_downloads())
+
+
+def test_doubtful_match_is_flagged_with_alternatives(tmp_path: Path) -> None:
+    pipeline, archive, track = doubtful_pipeline(tmp_path)
+    [task] = run(pipeline, ALBUM).tasks
+    assert task.status == TaskStatus.DONE and task.review is not None and "live" in task.review
+    assert task.match is not None and task.match.score == 70
+    assert [a.candidate.video_id for a in task.match.alternatives] == [STUDIO_VIDEO, COVER_VIDEO]
+    record = archive.get_download(track.key)
+    assert record is not None and record.review == task.review and record.video_id == LIVE_VIDEO
+
+    record.path.unlink()  # downloaded again from the remembered match: still offered
+    [again] = run(pipeline, ALBUM).tasks
+    assert again.match is not None and again.match.cached and again.review == task.review
+    assert [a.candidate.video_id for a in again.match.alternatives] == [STUDIO_VIDEO, COVER_VIDEO]
+
+    archive.confirm_match(track.key)  # the user kept it: never asked again
+    record.path.unlink()
+    [kept] = run(pipeline, ALBUM).tasks
+    assert kept.status == TaskStatus.DONE and kept.review is None
+    final = archive.get_download(track.key)
+    assert final is not None and final.review is None
+
+
+def test_chosen_match_replaces_the_file_in_place(tmp_path: Path) -> None:
+    pipeline, archive, track = doubtful_pipeline(tmp_path)
+    run(pipeline, ALBUM)
+    old = archive.get_download(track.key)
+    assert old is not None and old.path.read_bytes() == b"audio"
+    assert isinstance(pipeline.downloader, FakeDownloader)
+    pipeline.downloader.content[STUDIO_VIDEO] = b"studio"
+    job = asyncio.run(pipeline.run(replacement_job(archive, track, STUDIO_VIDEO)))
+    assert statuses(job) == [TaskStatus.DONE] and job.tasks[0].review is None
+    assert library_files(tmp_path) == [old.path]  # same name, no "(2)" copy
+    assert old.path.read_bytes() == b"studio"
+    record = archive.get_download(track.key)
+    assert record is not None and record.path == old.path
+    assert record.video_id == STUDIO_VIDEO and record.review is None
+    saved = archive.match_record(track.key)
+    assert saved is not None and saved.manual and saved.candidate.video_id == STUDIO_VIDEO
+
+
+def test_failed_replacement_keeps_the_old_file(tmp_path: Path) -> None:
+    pipeline, archive, track = doubtful_pipeline(tmp_path, retries=0)
+    run(pipeline, ALBUM)
+    old = archive.get_download(track.key)
+    assert old is not None
+    pipeline.downloader = FakeDownloader(fail_times=9)
+    job = asyncio.run(pipeline.run(replacement_job(archive, track, STUDIO_VIDEO)))
+    assert statuses(job) == [TaskStatus.FAILED]
+    assert library_files(tmp_path) == [old.path] and old.path.read_bytes() == b"audio"
+    record = archive.get_download(track.key)
+    assert record is not None and record.video_id == LIVE_VIDEO and record.review == old.review
+    saved = archive.match_record(track.key)
+    assert saved is not None and not saved.manual and saved.candidate.video_id == LIVE_VIDEO
+    assert archive.open_failures() == []  # the song isn't missing: nothing to "retry failed"
+
+
+def test_replacing_a_file_in_use_fails_clearly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pipeline, archive, track = doubtful_pipeline(tmp_path)
+    run(pipeline, ALBUM)
+    old = archive.get_download(track.key)
+    assert old is not None
+    real_replace = Path.replace
+
+    def replace(self: Path, target: Path) -> Path:
+        if Path(target) == old.path:
+            raise PermissionError(13, "The file is in use", str(target))
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", replace)
+    job = asyncio.run(pipeline.run(replacement_job(archive, track, STUDIO_VIDEO)))
+    [task] = job.tasks
+    assert task.status == TaskStatus.FAILED and task.attempts == 1  # not worth retrying
+    assert task.error is not None and "another program is using it" in task.error
+    assert library_files(tmp_path) == [old.path] and old.path.read_bytes() == b"audio"

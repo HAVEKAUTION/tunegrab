@@ -18,19 +18,29 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
 from tunegrab.config import Settings
 from tunegrab.download.convert import extension
-from tunegrab.download.ytdlp import DownloadCancelled, Downloader, DownloadError, SourceInfo
+from tunegrab.download.ytdlp import (
+    LOW_QUALITY_NOTE,
+    DownloadCancelled,
+    Downloader,
+    DownloadError,
+    SourceInfo,
+)
 from tunegrab.library.archive import Archive
-from tunegrab.library.paths import render_path, template_fields, unique_path
+from tunegrab.library.paths import move_into_place, render_path, replace_file, template_fields
 from tunegrab.library.playlists import playlist_file, write_m3u8
 from tunegrab.matching.matcher import Matcher
+from tunegrab.matching.scoring import review_note
 from tunegrab.metadata.resolver import Resolver
 from tunegrab.models import Candidate, Collection, Job, Match, TaskStatus, Track, TrackTask
+from tunegrab.pacing import Pacer
+from tunegrab.preflight import check_folder
+from tunegrab.runner import Cancelled, EventCallback, TaskFailed, TaskRunner
 from tunegrab.tagging.lyrics import Lyrics, write_lrc
 from tunegrab.urls import is_spotify_input
 
@@ -41,15 +51,25 @@ STALE_TMP_AGE_S = 6 * 3600
 RETRY_BACKOFF_S = 2.0
 RATE_LIMIT_PAUSE_S = 60.0  # first pause when YouTube says "too many requests"
 RATE_LIMIT_MAX_PAUSE_S = 300.0
+# After this many "slow down" answers in one job YouTube is blocking the connection, which
+# lasts about an hour; knocking again during it only makes it worse.
+RATE_LIMIT_BLOCK_AFTER = 3
+RATE_LIMIT_BLOCK_S = 3600.0
+RATE_LIMIT_GIVE_UP_AFTER = 5
+RATE_LIMIT_GAVE_UP = (
+    "YouTube keeps refusing downloads from your connection. Wait an hour or two, then press Retry."
+)
 MAX_ALTERNATIVES = 3  # other videos to try when the chosen one is unavailable
-
-EventCallback = Callable[[Job, TrackTask | None], None]
 
 
 class Tagger(Protocol):
     def tag(
         self, path: Path, track: Track, cover: bytes | None = None, lyrics: str | None = None
     ) -> None: ...
+
+    def identify(self, path: Path) -> tuple[str, str] | None:
+        """(title, artist) from an existing file's tags, if any."""
+        ...
 
 
 class LyricsSource(Protocol):
@@ -62,18 +82,8 @@ class QueryLookup(Protocol):
     def __call__(self, query: str) -> tuple[Track, Match] | None: ...
 
 
-class TaskFailed(Exception):
-    def __init__(self, message: str, *, retryable: bool = True) -> None:
-        super().__init__(message)
-        self.retryable = retryable
-
-
-class Cancelled(Exception):
-    pass
-
-
 @dataclass
-class Pipeline:
+class Pipeline(TaskRunner):
     settings: Settings
     resolver: Resolver
     matcher: Matcher
@@ -86,11 +96,18 @@ class Pipeline:
     on_event: EventCallback | None = None
     retry_backoff: float = RETRY_BACKOFF_S
     rate_limit_pause: float = RATE_LIMIT_PAUSE_S
+    rate_limit_block: float = RATE_LIMIT_BLOCK_S
+    # None: the process-wide pacer for YouTube (see tunegrab.pacing)
+    pacer: Pacer | None = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
     # Shared by all worker threads: no new download starts before this time.
     _cooldown_until: float = field(default=0.0, init=False, repr=False)
-    _cooldown_strikes: int = field(default=0, init=False, repr=False)
+    _cooldown_strikes: int = field(default=0, init=False, repr=False)  # in a row
+    _job_strikes: int = field(default=0, init=False, repr=False)  # in this job
+    _paused_job: Job | None = field(default=None, init=False, repr=False)
     _cooldown_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    # Set when the whole job must stop (e.g. the disk is full); a sentence for the user.
+    abort_reason: str | None = field(default=None, init=False)
 
     # --- building jobs -------------------------------------------------------------
     def build_job(self, text: str) -> Job:
@@ -109,37 +126,28 @@ class Pipeline:
         if found is None:
             raise LookupError(f"No YouTube Music results for {text!r}")
         track, match = found
-        collection = Collection(kind="search", name=text, tracks=[track], source="ytmusic")
+        name = f"{track.title} \u2013 {', '.join(track.artists)}" if track.artists else track.title
+        collection = Collection(kind="search", name=name, tracks=[track], source="ytmusic")
         return Job(
             input=text,
             collection=collection,
             tasks=[TrackTask(track=track, position=1, match=match)],
         )
 
-    def job_from_tasks(
-        self, text: str, collection: Collection | None, tasks: list[TrackTask]
-    ) -> Job:
-        return Job(input=text, collection=collection, tasks=tasks)
-
     # --- running ---------------------------------------------------------------------
-    def cancel(self) -> None:
-        self.cancel_event.set()
+    def resume(self) -> bool:
+        """End a rate-limit pause early (the user pressed Try now). False if not paused."""
+        with self._cooldown_lock:
+            if self._cooldown_until <= time.monotonic():
+                return False
+            self._cooldown_until = 0.0
+            self._cooldown_strikes = 0
+        log.info("rate-limit pause ended early by the user")
+        return True
 
     @property
     def output_dir(self) -> Path:
         return self.settings.resolved_output_dir
-
-    def _emit(self, job: Job, task: TrackTask | None = None) -> None:
-        if self.on_event is not None:
-            try:
-                self.on_event(job, task)
-            except Exception:  # a broken UI must never kill a download
-                log.exception("event callback failed")
-
-    def _set(self, job: Job, task: TrackTask, status: TaskStatus, message: str = "") -> None:
-        task.status = status
-        task.message = message
-        self._emit(job, task)
 
     def _clean_stale_tmp(self) -> Path:
         root = self.output_dir / TMP_DIR_NAME
@@ -154,7 +162,10 @@ class Pipeline:
         return root
 
     async def run(self, job: Job) -> Job:
-        """Run every task of ``job``; returns the same job with statuses filled in."""
+        """Run every task of ``job``; returns the same job with statuses filled in.
+
+        Raises :class:`~tunegrab.preflight.JobAborted` if the music folder is unusable."""
+        check_folder(self.output_dir)
         tmp_root = self._clean_stale_tmp()
         collection = job.collection
         if (
@@ -169,23 +180,45 @@ class Pipeline:
         executor = ThreadPoolExecutor(
             max_workers=self.settings.threads, thread_name_prefix="tunegrab"
         )
-        futures = [
-            loop.run_in_executor(executor, self._process, job, task, tmp_root) for task in job.tasks
-        ]
+        # A playlist can list the same song twice: download it once, then let the repeats
+        # find it in the archive ("already downloaded") instead of racing the first copy.
+        seen: set[str] = set()
+        first: list[TrackTask] = []
+        repeats: list[TrackTask] = []
+        for task in job.tasks:
+            (repeats if task.track.key in seen else first).append(task)
+            seen.add(task.track.key)
         try:
-            await asyncio.gather(*futures)
+            for batch in (first, repeats):
+                await asyncio.gather(
+                    *(
+                        loop.run_in_executor(executor, self._process, job, task, tmp_root)
+                        for task in batch
+                    )
+                )
         except asyncio.CancelledError:
             self.cancel()
             job.cancelled = True
             raise
         finally:
-            if self.cancel_event.is_set():
+            if self.cancel_event.is_set() and self.abort_reason is None:
                 job.cancelled = True
-            executor.shutdown(wait=True, cancel_futures=True)
+            # Wait for the workers in a thread: blocking here would freeze the event loop
+            # (and with it the web server) until every download in flight has stopped.
+            await asyncio.shield(
+                loop.run_in_executor(None, lambda: executor.shutdown(True, cancel_futures=True))
+            )
             for task in job.tasks:
-                if not task.status.finished:
+                if self.abort_reason is not None and (
+                    not task.status.finished
+                    or (task.status == TaskStatus.SKIPPED and task.message == "cancelled")
+                ):
+                    self._fail_task(job, task, f"Not downloaded: {self.abort_reason}")
+                elif not task.status.finished:
                     task.status = TaskStatus.SKIPPED
                     task.message = "cancelled"
+            if self.abort_reason is not None:
+                job.error = self.abort_reason
             self._finish_playlist(job)
             with contextlib.suppress(OSError):  # only if empty: no stray folder in the library
                 tmp_root.rmdir()
@@ -194,25 +227,46 @@ class Pipeline:
         return job
 
     # --- YouTube rate limits ------------------------------------------------------------
-    def _rate_limited(self) -> float:
-        """YouTube said "slow down": pause every worker, longer each time it repeats."""
+    def _rate_limited(self, job: Job | None = None) -> float:
+        """YouTube said "slow down": pause every worker, longer each time it repeats; on
+        the third time in a job pause for an hour, on the fifth stop the job."""
         with self._cooldown_lock:
             self._cooldown_strikes += 1
-            pause = min(
-                RATE_LIMIT_MAX_PAUSE_S, self.rate_limit_pause * 2.0 ** (self._cooldown_strikes - 1)
-            )
+            self._job_strikes += 1
+            if self._job_strikes >= RATE_LIMIT_GIVE_UP_AFTER:
+                pause = 0.0
+            elif self._job_strikes >= RATE_LIMIT_BLOCK_AFTER:
+                pause = self.rate_limit_block
+            else:
+                pause = min(
+                    RATE_LIMIT_MAX_PAUSE_S,
+                    self.rate_limit_pause * 2.0 ** (self._cooldown_strikes - 1),
+                )
             self._cooldown_until = max(self._cooldown_until, time.monotonic() + pause)
-            return pause
+            give_up = self._job_strikes >= RATE_LIMIT_GIVE_UP_AFTER
+        if give_up:
+            self.abort(RATE_LIMIT_GAVE_UP)
+        elif job is not None and pause >= self.rate_limit_block > 0:
+            job.paused_until = datetime.now(UTC) + timedelta(seconds=pause)
+            self._emit(job)
+        return pause
 
     def _wait_for_cooldown(self, job: Job, task: TrackTask) -> None:
         while True:
             with self._cooldown_lock:
                 remaining = self._cooldown_until - time.monotonic()
             if remaining <= 0:
+                if job.paused_until is not None:
+                    job.paused_until = None
+                    self._emit(job)
                 return
-            task.message = f"YouTube asked to slow down: waiting {remaining:.0f} s"
+            if job.paused_until is not None:
+                at = job.paused_until.astimezone().strftime("%H:%M")
+                task.message = f"YouTube paused downloads from your connection: continuing at {at}"
+            else:
+                task.message = f"YouTube asked to slow down: waiting {remaining:.0f} s"
             self._emit(job, task)
-            if self.cancel_event.wait(min(remaining, 5.0)):
+            if self.cancel_event.wait(min(remaining, 1.0)):  # short: Try now reacts fast
                 raise Cancelled()
 
     def _finish_playlist(self, job: Job) -> None:
@@ -266,47 +320,54 @@ class Pipeline:
             self._set(job, task, TaskStatus.SKIPPED, "cancelled")
             return
         try:
-            if self._skip_existing(job, task):
+            if task.replaces is None and self._skip_existing(job, task):
                 return
-            attempts = self.settings.retries + 1
-            for attempt in range(1, attempts + 1):
-                task.attempts = attempt
-                try:
-                    self._attempt(job, task, tmp_root)
-                    return
-                except TaskFailed as exc:
-                    if not exc.retryable or attempt == attempts:
-                        raise
-                    log.info("retrying %s after: %s", task.track.display, exc)
-                except (Cancelled, DownloadCancelled):
-                    raise
-                except Exception as exc:
-                    if attempt == attempts:
-                        raise TaskFailed(str(exc) or type(exc).__name__) from exc
-                    log.info("retrying %s after: %s", task.track.display, exc)
-                task.message = f"retry {attempt}/{attempts - 1}"
-                self._emit(job, task)
-                if self.cancel_event.wait(self.retry_backoff * attempt):
-                    raise Cancelled()
+            self._run_attempts(
+                job,
+                task,
+                lambda: self._attempt(job, task, tmp_root),
+                retryable=lambda exc: not isinstance(exc, TaskFailed) or exc.retryable,
+            )
         except (Cancelled, DownloadCancelled):
             self._set(job, task, TaskStatus.SKIPPED, "cancelled")
         except Exception as exc:
-            stage = task.status.value if not task.status.finished else None
-            task.failed_stage = stage
-            task.error = str(exc) or type(exc).__name__
-            log.warning("failed: %s at %s: %s", task.track.display, stage, task.error)
-            try:
-                self.archive.record_failure(
-                    job.input, job.collection, task.position, task.track, stage, task.error
-                )
-            except Exception:
-                log.exception("could not record failure")
-            self._set(job, task, TaskStatus.FAILED, task.error)
+            self._fail_with(job, task, exc)
+
+    def _record_failure(self, job: Job, task: TrackTask) -> None:
+        if task.replaces is not None:
+            return  # the song is still in the library; nothing is missing to retry later
+        self.archive.record_failure(
+            job.input,
+            job.collection,
+            task.position,
+            task.track,
+            task.failed_stage,
+            task.error or "",
+            self.settings.format,
+        )
+
+    def _adopt_existing(self, job: Job, task: TrackTask) -> bool:
+        """The song is already in the library under its usual name but missing from the
+        download history (a reset history, or a record that failed to save): use that file
+        instead of downloading it again as "Song (2)"."""
+        if task.track.is_incomplete:
+            return False  # its usual name isn't known until the details are filled in
+        target = self.target_path(job, task)
+        if not target.is_file() or self.archive.path_is_recorded(target):
+            return False  # nothing there, or it's another song's file
+        found = self.tagger.identify(target)
+        if found is None or not _same_song(found, task.track):
+            return False
+        self.archive.record_download(task.track, target, None, self.settings.format)
+        self.archive.resolve_failures(task.track.key)
+        task.path = str(target)
+        self._set(job, task, TaskStatus.SKIPPED, "already in your library")
+        return True
 
     def _skip_existing(self, job: Job, task: TrackTask) -> bool:
         existing = self.archive.downloaded_path(task.track.key)
         if existing is None:
-            return False
+            return self._adopt_existing(job, task)
         if existing.suffix.lower() != "." + extension(self.settings.format):
             return False  # asked for another format: download it in that format too
         folder_mode = (
@@ -346,8 +407,7 @@ class Pipeline:
         if match.candidate is None or not match.accepted(self.settings.match_threshold):
             best = f"best {match.score:.0f}: {match.reason}" if match.candidate else match.reason
             raise TaskFailed(
-                f"no match above {self.settings.match_threshold:.0f} ({best}). "
-                "Use `tunegrab fix` to choose one.",
+                f"no match above {self.settings.match_threshold:.0f} ({best})",
                 retryable=False,
             )
         candidate = match.candidate
@@ -376,21 +436,80 @@ class Pipeline:
 
             # 6. move into the library
             self._check_cancel()
-            target = unique_path(self.target_path(job, task))
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(audio), str(target))
+            target = self._place(job, task, audio)
         if lyrics is not None and lyrics.synced and self.settings.lrc:
             try:
                 write_lrc(target, lyrics.synced)
             except OSError as exc:
                 log.info("could not write .lrc for %s: %s", target.name, exc)
 
-        # 7. archive
+        # 7. archive (the file is safe in the library whatever happens here)
         task.path = str(target)
         task.progress = 1.0
-        self.archive.record_download(track, target, candidate.video_id, self.settings.format)
-        self.archive.resolve_failures(track.key)
-        self._set(job, task, TaskStatus.DONE)
+        message = ""
+        try:
+            chosen = task.match if task.match is not None else match
+            if task.replaces is not None:  # the user picked this video: remember it for good
+                self.archive.put_match(
+                    track.key,
+                    candidate,
+                    chosen.score,
+                    chosen.reason,
+                    manual=True,
+                    alternatives=chosen.alternatives,
+                )
+            else:
+                task.review = self._review(track, candidate, chosen)
+            self.archive.record_download(
+                track,
+                target,
+                candidate.video_id,
+                self.settings.format,
+                review=task.review,
+                source=(task.source or "").removesuffix(LOW_QUALITY_NOTE) or None,
+                low_quality=task.low_quality,
+            )
+            self.archive.resolve_failures(track.key)
+        except Exception:
+            log.exception("could not record %s in the download history", target)
+            message = "saved, but not added to the download history"
+        self._set(job, task, TaskStatus.DONE, message)
+
+    def _place(self, job: Job, task: TrackTask, audio: Path) -> Path:
+        """Move the tagged file into the library. A file the user asked to swap for
+        another match is only replaced here, once its replacement is complete."""
+        old = Path(task.replaces) if task.replaces else None
+        if old is None or not old.is_file():
+            return move_into_place(audio, self.target_path(job, task))
+        if old.suffix.lower() != audio.suffix.lower():  # the format changed: new name
+            target = move_into_place(audio, self.target_path(job, task))
+            try:
+                old.unlink()
+            except OSError as exc:
+                log.warning("could not remove the replaced file %s: %s", old, exc)
+            return target
+        try:
+            return replace_file(audio, old)
+        except PermissionError as exc:
+            raise TaskFailed(
+                f"Couldn't replace {old.name}: another program is using it. Close it there "
+                "and choose the match again. Your current file wasn't changed.",
+                retryable=False,
+            ) from exc
+
+    def _review(self, track: Track, candidate: Candidate, match: Match) -> str | None:
+        """Why this match should be checked by the user, if it should. Fills in the
+        alternatives saved with a cached match so the page can offer them."""
+        note = review_note(track, candidate, match.score)
+        if note is None:
+            return None
+        saved = self.archive.match_record(track.key)
+        if saved is not None and saved.candidate.video_id == candidate.video_id:
+            if saved.manual:
+                return None  # already checked and kept
+            if not match.alternatives:
+                match.alternatives = saved.alternatives
+        return note
 
     def _download(
         self,
@@ -404,7 +523,13 @@ class Pipeline:
         blocked in this country, age-gated) try the next-best match instead."""
         tried: set[str] = set()
         while True:
+            if self.cancel_event.is_set():
+                raise Cancelled()
             self._wait_for_cooldown(job, task)
+            self._pace(job, task)
+            if task.message and task.message.startswith(("Pacing", "YouTube")):
+                task.message = ""
+                self._emit(job, task)
 
             def on_source(info: SourceInfo) -> None:
                 task.source = info.label
@@ -422,9 +547,10 @@ class Pipeline:
                 raise
             except DownloadError as exc:
                 if exc.kind == "rate_limited":
-                    pause = self._rate_limited()
+                    # Not the song's fault: wait and try it again without using a retry.
+                    pause = self._rate_limited(job)
                     log.warning("YouTube rate limit; pausing downloads for %.0f s", pause)
-                    raise TaskFailed(f"YouTube asked to slow down ({exc})") from exc
+                    continue
                 if exc.kind != "unavailable" or candidate.source == "manual":
                     raise
                 tried.add(candidate.video_id)
@@ -467,6 +593,13 @@ class Pipeline:
         except Exception as exc:
             log.info("lyrics lookup failed for %s: %s", track.display, exc)
             return None
+
+
+def _same_song(found: tuple[str, str], track: Track) -> bool:
+    title, artist = (part.casefold().strip() for part in found)
+    return title == track.title.casefold().strip() and (
+        track.primary_artist.casefold().strip() in artist
+    )
 
 
 def run_job_sync(pipeline: Pipeline, job: Job) -> Job:

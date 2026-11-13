@@ -7,42 +7,47 @@ so it must not be exposed to untrusted networks.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
-import subprocess
-import sys
+import threading
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from tunegrab import __version__, storage
+from tunegrab.browse import SearchResults
 from tunegrab.config import (
-    AudioFormat,
+    COOKIE_BROWSERS,
     Settings,
-    VideoQuality,
     coerce_setting,
     config_file,
+    data_dir,
+    keep_earlier_defaults,
     log_dir,
     read_config_file,
+    startup_warnings,
     write_config_file,
 )
-from tunegrab.doctor import run_all, update_ytdlp
+from tunegrab.doctor import Status, check_output_dir, run_all, update_ytdlp
 from tunegrab.download.ytdlp import DownloadError
-from tunegrab.imports import collection_from_csv
+from tunegrab.errors import TuneGrabError
+from tunegrab.imports import CsvImportError, collection_from_csv
+from tunegrab.library import sync as playlist_sync
+from tunegrab.library.archive import DownloadRecord
 from tunegrab.library.paths import TemplateError, validate_template
 from tunegrab.matching.base import SearchError
 from tunegrab.metadata.base import MetadataError, NotFoundError
-from tunegrab.models import Candidate, Collection, Job, Match, TaskStatus, Track, TrackTask
-from tunegrab.pipeline import Pipeline
+from tunegrab.models import Candidate, Collection, Job, TaskStatus, Track, TrackTask
+from tunegrab.net import NetworkError
+from tunegrab.runner import unexpected_message as unexpected_error
 from tunegrab.services import Services, build_services
+from tunegrab.updates import UpdateChecker
 from tunegrab.urls import (
     InvalidURLError,
     SpotifyRef,
@@ -51,428 +56,29 @@ from tunegrab.urls import (
     parse_youtube_id,
 )
 from tunegrab.video import (
-    VideoEntry,
     VideoError,
-    VideoMode,
-    VideoOptions,
-    VideoPipeline,
-    VideoProbe,
-    build_job,
     check_clip,
     parse_time,
-    probe,
+)
+from tunegrab.web.desktop import open_in_file_manager, pick_folder
+from tunegrab.web.jobs import (
+    CleanRequest,
+    JobManager,
+    JobRequest,
+    VideoRequest,
+    candidate_payload,
+    job_summary,
+    release_payload,
+    review_payload,
+    task_payload,
 )
 
 log = logging.getLogger(__name__)
 
-PROGRESS_EVENT_INTERVAL_S = 0.3
-MAX_JOBS = 200  # in memory; older finished jobs stay in the archive's job history
 SYSTEM_CACHE_S = 60.0
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})
 HEARTBEAT_S = 15.0
-
-
-class VideoRequest(BaseModel):
-    """A video link to download as video (MP4) or audio, optionally only a clip."""
-
-    url: str = Field(min_length=1, max_length=4000)
-    mode: VideoMode = "video"
-    quality: VideoQuality | None = None  # default: the video_quality setting
-    start: str | None = None  # "1:23"
-    end: str | None = None
-    format: AudioFormat | None = None  # for mode="audio"
-
-
-class CleanRequest(BaseModel):
-    keys: list[str] = Field(default_factory=lambda: ["tmp", "logs", "database", "ytdlp_cache"])
-
-
-class Runner(Protocol):
-    async def run(self, job: Job) -> Job: ...
-    def cancel(self) -> None: ...
-
-
-PROBE_CACHE_S = 600.0
-PROBE_CACHE_SIZE = 32
-
-
-class JobRequest(BaseModel):
-    """One download job. Give exactly one source:
-
-    * ``url``: a Spotify link or search text (optionally only ``track_ids`` of it);
-    * ``ytm_album``: a YouTube Music album browse ID (optionally only ``track_ids``,
-      which are video IDs);
-    * ``spotify_tracks``: Spotify track IDs, downloaded as one job called ``name``;
-    * ``csv_text``: an Exportify-style CSV, downloaded as a playlist called ``name``.
-    """
-
-    url: str | None = None
-    ytm_album: str | None = None
-    spotify_tracks: list[str] | None = None
-    csv_text: str | None = Field(default=None, max_length=20_000_000)
-    track_ids: list[str] | None = None
-    name: str | None = None
-    format: AudioFormat | None = None
-
-    @property
-    def label(self) -> str:
-        return self.name or self.url or self.ytm_album or "Selected tracks"
-
-
-def release_payload(
-    collection: Collection, matches: dict[str, Match] | None = None
-) -> dict[str, Any]:
-    """A collection for the browser, each track with the ``id`` used for ``track_ids``."""
-    data = collection.model_dump(mode="json")
-    keys = list(matches or {})
-    for index, track in enumerate(data["tracks"]):
-        track["id"] = track.get("spotify_id") or (keys[index] if index < len(keys) else None)
-    return data
-
-
-def job_summary(job: Job) -> dict[str, Any]:
-    collection = job.collection
-    return {
-        "id": job.id,
-        "input": job.input,
-        "name": job.name,
-        "kind": collection.kind if collection else None,
-        "source": collection.source if collection else None,
-        "warnings": collection.warnings if collection else [],
-        "total": len(job.tasks),
-        "counts": job.counts(),
-        "created_at": job.created_at.isoformat(),
-        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
-        "cancelled": job.cancelled,
-        "error": job.error,
-        "state": job_state(job),
-    }
-
-
-def job_state(job: Job) -> str:
-    if job.error:
-        return "error"
-    if job.collection is None:
-        return "resolving"
-    if job.finished_at:
-        return "cancelled" if job.cancelled else "finished"
-    if any(t.status != TaskStatus.QUEUED for t in job.tasks):
-        return "running"
-    return "queued"
-
-
-def task_payload(job: Job, task: TrackTask) -> dict[str, Any]:
-    match = task.match
-    return {
-        "job_id": job.id,
-        "id": task.id,
-        "position": task.position,
-        "title": task.track.title,
-        "artists": task.track.artists,
-        "album": task.track.album,
-        "duration_s": round(task.track.duration_s),
-        "status": task.status.value,
-        "progress": round(task.progress, 3),
-        "message": task.message,
-        "error": task.error,
-        "path": task.path,
-        "source": task.source,
-        "low_quality": task.low_quality,
-        "match": (
-            {
-                "url": match.candidate.url,
-                "title": match.candidate.title,
-                "score": round(match.score),
-                "reason": match.reason,
-            }
-            if match is not None and match.candidate is not None
-            else None
-        ),
-    }
-
-
-class JobManager:
-    """Holds jobs in memory, runs them one at a time (each job is parallel inside)."""
-
-    def __init__(self, services: Services) -> None:
-        self.services = services
-        self.jobs: dict[str, Job] = {}
-        self.pipelines: dict[str, Runner] = {}
-        # video jobs: what's needed to retry them (options, task id -> video)
-        self.video_jobs: dict[str, tuple[VideoOptions, dict[str, VideoEntry]]] = {}
-        self._probes: dict[str, tuple[float, VideoProbe]] = {}
-        self.subscribers: set[asyncio.Queue[str]] = set()
-        self.loop: asyncio.AbstractEventLoop | None = None
-        self._run_lock = asyncio.Lock()
-        self._last_sent: dict[str, tuple[str, float]] = {}
-        self._background: set[asyncio.Task[None]] = set()
-
-    # -- events
-    def _publish(self, event: str, data: dict[str, Any]) -> None:
-        message = f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-        for queue in list(self.subscribers):
-            if queue.qsize() < 1000:
-                queue.put_nowait(message)
-
-    def _on_event(self, job: Job, task: TrackTask | None) -> None:
-        """Called from pipeline worker threads."""
-        if self.loop is None:
-            return
-        if task is None:
-            payload = job_summary(job)
-            self.loop.call_soon_threadsafe(self._publish, "job", payload)
-            return
-        now = time.monotonic()
-        last = self._last_sent.get(task.id)
-        if (
-            last is not None
-            and last[0] == task.status.value
-            and not task.status.finished
-            and now - last[1] < PROGRESS_EVENT_INTERVAL_S
-        ):
-            return
-        self._last_sent[task.id] = (task.status.value, now)
-        task_data = task_payload(job, task)
-        summary = job_summary(job)
-        self.loop.call_soon_threadsafe(self._publish, "task", task_data)
-        if task.status.finished:
-            self.loop.call_soon_threadsafe(self._publish, "job", summary)
-
-    def subscribe(self) -> asyncio.Queue[str]:
-        queue: asyncio.Queue[str] = asyncio.Queue()
-        self.subscribers.add(queue)
-        return queue
-
-    def unsubscribe(self, queue: asyncio.Queue[str]) -> None:
-        self.subscribers.discard(queue)
-
-    # -- jobs
-    def _spawn(self, coro: Any) -> None:
-        task = asyncio.create_task(coro)
-        self._background.add(task)
-        task.add_done_callback(self._background.discard)
-
-    async def submit(self, request: JobRequest) -> Job:
-        self.loop = asyncio.get_running_loop()
-        job = Job(input=request.label.strip())
-        self.jobs[job.id] = job
-        self._publish("job", job_summary(job))
-        self._spawn(self._resolve_and_run(job, request))
-        return job
-
-    def _build(self, pipeline: Pipeline, request: JobRequest) -> Job:
-        wanted = set(request.track_ids) if request.track_ids else None
-        if request.ytm_album:
-            collection, matches = self.services.browser.ytmusic.album(request.ytm_album)
-            tasks = [
-                TrackTask(track=match.track, position=position, match=match)
-                for position, (video_id, match) in enumerate(matches.items(), start=1)
-                if wanted is None or video_id in wanted
-            ]
-            collection.tracks = [t.track for t in tasks]
-            return Job(input=request.label, collection=collection, tasks=tasks)
-        if request.csv_text:
-            collection = collection_from_csv(
-                request.csv_text,
-                (request.name or "Imported songs").strip() or "Imported songs",
-                lookup=lambda tid: self.services.resolver.resolve_ref(
-                    SpotifyRef("track", tid)
-                ).tracks[0],
-            )
-            tasks = [
-                TrackTask(track=t, position=i) for i, t in enumerate(collection.tracks, start=1)
-            ]
-            return Job(input=request.label, collection=collection, tasks=tasks)
-        if request.spotify_tracks:
-            tracks = [
-                self.services.resolver.resolve_ref(SpotifyRef("track", tid)).tracks[0]
-                for tid in dict.fromkeys(request.spotify_tracks)
-            ]
-            collection = Collection(
-                kind="selection", name=request.name or "Selected tracks", tracks=tracks
-            )
-            tasks = [TrackTask(track=t, position=i) for i, t in enumerate(tracks, start=1)]
-            return Job(input=request.label, collection=collection, tasks=tasks)
-        job = pipeline.build_job(request.url or "")
-        if wanted is not None and job.collection is not None:
-            job.tasks = [t for t in job.tasks if t.track.spotify_id in wanted]
-            job.collection.tracks = [t.track for t in job.tasks]
-            if job.collection.kind == "artist":
-                job.collection.kind = "selection"
-        return job
-
-    def _settings_for(self, fmt: AudioFormat | None) -> Settings:
-        if fmt is None:
-            return self.services.settings
-        return self.services.settings.model_copy(update={"format": fmt})
-
-    async def _resolve_and_run(self, job: Job, request: JobRequest) -> None:
-        pipeline = self.services.pipeline(
-            on_event=self._on_event, settings=self._settings_for(request.format)
-        )
-        try:
-            built = await asyncio.to_thread(self._build, pipeline, request)
-            if not built.tasks:
-                raise LookupError("None of the selected tracks were found.")
-        except (MetadataError, InvalidURLError, LookupError, ValueError, SearchError) as exc:
-            job.error = str(exc)
-            job.finished_at = job.created_at
-            self._publish("job", job_summary(job))
-            return
-        job.collection = built.collection
-        job.tasks = built.tasks
-        self._publish("job", job_summary(job))
-        await self._run(job, pipeline)
-
-    # -- video
-    def probe(self, url: str) -> VideoProbe:
-        """yt-dlp lookup, cached for a few minutes (Browse, then Download, = one lookup)."""
-        key = url.strip()
-        now = time.monotonic()
-        cached = self._probes.get(key)
-        if cached is not None and now - cached[0] < PROBE_CACHE_S:
-            return cached[1]
-        found = probe(key, self.services.settings.cookies_from_browser)
-        self._probes[key] = (now, found)
-        if len(self._probes) > PROBE_CACHE_SIZE:
-            oldest = min(self._probes, key=lambda k: self._probes[k][0])
-            self._probes.pop(oldest, None)
-        return found
-
-    def _video_pipeline(
-        self, options: VideoOptions, entries: dict[str, VideoEntry], fmt: AudioFormat | None
-    ) -> VideoPipeline:
-        return VideoPipeline(self._settings_for(fmt), options, entries, on_event=self._on_event)
-
-    async def submit_video(self, request: VideoRequest) -> Job:
-        self.loop = asyncio.get_running_loop()
-        job = Job(input=request.url.strip())
-        self.jobs[job.id] = job
-        self._publish("job", job_summary(job))
-        self._spawn(self._probe_and_run(job, request))
-        return job
-
-    async def _probe_and_run(self, job: Job, request: VideoRequest) -> None:
-        try:
-            found = await asyncio.to_thread(self.probe, request.url)
-            start, end = parse_time(request.start), parse_time(request.end)
-            if (start is not None or end is not None) and found.kind != "video":
-                raise VideoError("A clip needs a single video, not a playlist.")
-            duration = found.entries[0].duration_s if found.kind == "video" else None
-            start, end = check_clip(start, end, duration)
-        except (VideoError, DownloadError) as exc:
-            job.error = str(exc)
-            job.finished_at = job.created_at
-            self._publish("job", job_summary(job))
-            return
-        options = VideoOptions(
-            mode=request.mode,
-            quality=request.quality or self.services.settings.video_quality,
-            start=start,
-            end=end,
-        )
-        built, entries = build_job(found, options)
-        job.collection, job.tasks = built.collection, built.tasks
-        self.video_jobs[job.id] = (options, entries)
-        self._publish("job", job_summary(job))
-        await self._run(job, self._video_pipeline(options, entries, request.format))
-
-    async def _run(self, job: Job, pipeline: Runner) -> None:
-        self.pipelines[job.id] = pipeline
-        async with self._run_lock:
-            if job.cancelled:
-                job.finished_at = job.created_at
-                self._publish("job", job_summary(job))
-                self._remember(job)
-                return
-            try:
-                await pipeline.run(job)
-            except Exception as exc:  # never let one job break the manager
-                log.exception("job %s crashed", job.id)
-                job.error = str(exc)
-                job.finished_at = job.finished_at or job.created_at
-                self._publish("job", job_summary(job))
-            finally:
-                self.pipelines.pop(job.id, None)
-                self._remember(job)
-
-    def _remember(self, job: Job) -> None:
-        """Persist the finished job's summary and keep the in-memory list bounded."""
-        try:
-            self.services.archive.save_job(job_summary(job))
-        except Exception:
-            log.exception("could not save job history for %s", job.id)
-        finished = [j for j in self.jobs.values() if j.finished_at or j.error]
-        excess = max(0, len(self.jobs) - MAX_JOBS)
-        for old in sorted(finished, key=lambda j: j.created_at)[:excess]:
-            self.jobs.pop(old.id, None)
-
-    def busy(self) -> bool:
-        return any(
-            job_state(job) in ("resolving", "queued", "running") for job in self.jobs.values()
-        )
-
-    def clear_finished(self) -> int:
-        done = [jid for jid, j in self.jobs.items() if j.finished_at or j.error]
-        for jid in done:
-            self.jobs.pop(jid, None)
-        return len(done) + self.services.archive.clear_job_history()
-
-    async def retry_failures(self) -> Job:
-        """One job for every track whose last attempt failed (survives restarts)."""
-        records = self.services.archive.open_failures()
-        if not records:
-            raise ValueError("No failed tracks to retry.")
-        tracks = list({r.key: r.track for r in records}.values())
-        collection = Collection(kind="selection", name="Retry failed tracks", tracks=tracks)
-        job = Job(
-            input="retry",
-            collection=collection,
-            tasks=[TrackTask(track=t, position=i) for i, t in enumerate(tracks, start=1)],
-        )
-        self.loop = asyncio.get_running_loop()
-        self.jobs[job.id] = job
-        self._publish("job", job_summary(job))
-        self._spawn(self._run(job, self.services.pipeline(on_event=self._on_event)))
-        return job
-
-    def retry(self, job_id: str, task_ids: set[str] | None = None) -> Job:
-        """Re-run the failed tracks of a job (or only ``task_ids`` of them)."""
-        old = self.jobs[job_id]
-        failed = [
-            t
-            for t in old.tasks
-            if t.status == TaskStatus.FAILED and (task_ids is None or t.id in task_ids)
-        ]
-        if not failed:
-            raise ValueError("This job has no failed tracks.")
-        tasks = [TrackTask(track=t.track, position=t.position) for t in failed]
-        video = self.video_jobs.get(job_id)
-        collection = old.collection
-        if collection is not None and video is None:  # video jobs keep "video:<mode>"
-            collection = collection.model_copy(update={"source": "retry"})
-        job = Job(input=old.input, collection=collection, tasks=tasks)
-        self.jobs[job.id] = job
-        self.loop = asyncio.get_running_loop()
-        self._publish("job", job_summary(job))
-        runner: Runner
-        if video is not None:
-            options, old_entries = video
-            entries = {new.id: old_entries[o.id] for new, o in zip(tasks, failed, strict=True)}
-            self.video_jobs[job.id] = (options, entries)
-            runner = self._video_pipeline(options, entries, None)
-        else:
-            runner = self.services.pipeline(on_event=self._on_event)
-        self._spawn(self._run(job, runner))
-        return job
-
-    def cancel(self, job_id: str) -> None:
-        job = self.jobs[job_id]
-        job.cancelled = True
-        pipeline = self.pipelines.get(job_id)
-        if pipeline is not None:
-            pipeline.cancel()
-
+SHUTDOWN_WAIT_S = 15.0  # how long a stopping server lets running songs finish cleanly
 
 # Settings the browser may change (secrets/paths to the archive stay CLI/.env only).
 UI_SETTINGS = (
@@ -486,6 +92,8 @@ UI_SETTINGS = (
     "track_template",
     "playlist_template",
     "video_quality",
+    "cookies_from_browser",
+    "check_updates",
 )
 
 
@@ -495,6 +103,49 @@ def settings_payload(settings: Settings) -> dict[str, Any]:
     return {"values": values, "saved": sorted(read_config_file())}
 
 
+def check_music_folder(folder: Path) -> None:
+    """Raise ValueError (shown in Settings) unless new files can be saved in ``folder``."""
+    folder = folder.expanduser()
+    if not folder.is_absolute():
+        raise ValueError("Use a full folder path (Choose folder fills one in for you).")
+    result = check_output_dir(folder)
+    if result.status is Status.FAIL:
+        raise ValueError(f"TuneGrab can't save music there: {result.detail}")
+
+
+# Settings as the page names them, for error messages ("Songs at once can be at most 16")
+SETTING_LABELS = {
+    "output_dir": "Music folder",
+    "format": "Format",
+    "bitrate": "MP3 quality",
+    "threads": "Songs at once",
+    "playlist_mode": "Playlists",
+    "track_template": "Albums and songs",
+    "playlist_template": "Playlist folders",
+    "video_quality": "Video quality",
+    "cookies_from_browser": "Use sign-in from",
+}
+
+
+class SettingError(ValueError):
+    """A rejected setting, remembering which one."""
+
+    def __init__(self, field: str, message: str) -> None:
+        super().__init__(message)
+        self.field = field
+
+
+def setting_error(exc: Exception) -> dict[str, Any]:
+    """A settings error in the page's words, with the field it belongs to (if known)."""
+    message = str(exc.args[0]) if isinstance(exc, KeyError) and exc.args else str(exc)
+    field = exc.field if isinstance(exc, SettingError) else None
+    if field and message.startswith(field):
+        message = SETTING_LABELS[field] + message[len(field) :]
+    message = message.replace(" must be >= ", " must be at least ")
+    message = message.replace(" must be <= ", " can be at most ")
+    return {"message": message, "field": field}
+
+
 def apply_settings(current: Settings, changes: dict[str, Any]) -> Settings:
     """Validate ``changes``, save them to the config file and return updated settings."""
     unknown = sorted(set(changes) - set(UI_SETTINGS))
@@ -502,9 +153,20 @@ def apply_settings(current: Settings, changes: dict[str, Any]) -> Settings:
         raise ValueError(f"Can't change {', '.join(unknown)} here")
     typed: dict[str, Any] = {}
     for key, raw in changes.items():
-        value = coerce_setting(key, "" if raw is None else str(raw).strip())
-        if key.endswith("_template") and value:
-            validate_template(str(value))
+        try:
+            value = coerce_setting(key, "" if raw is None else str(raw).strip())
+            if key.endswith("_template") and value:
+                validate_template(str(value))
+            if key == "output_dir" and value:
+                check_music_folder(Path(str(value)))
+            if key == "cookies_from_browser" and value:
+                value = str(value).lower()
+                if value not in COOKIE_BROWSERS:
+                    raise ValueError(
+                        f"cookies_from_browser must be one of {', '.join(COOKIE_BROWSERS)}"
+                    )
+        except (ValueError, TemplateError) as exc:
+            raise SettingError(key, str(exc)) from exc
         typed[key] = value
     stored = read_config_file()
     update: dict[str, Any] = {}
@@ -519,44 +181,59 @@ def apply_settings(current: Settings, changes: dict[str, Any]) -> Settings:
     return current.model_copy(update=update)
 
 
-def open_in_file_manager(path: Path) -> None:
-    """Show ``path`` (a folder, or a file selected in its folder) in Explorer/Finder/etc."""
-    if sys.platform == "win32":
-        if path.is_file():
-            subprocess.Popen(["explorer", "/select,", str(path)])
-        else:
-            os.startfile(path)  # type: ignore[attr-defined,unused-ignore]
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", "-R", str(path)] if path.is_file() else ["open", str(path)])
-    else:
-        subprocess.Popen(["xdg-open", str(path if path.is_dir() else path.parent)])
-
-
-def pick_folder(initial: Path) -> str | None:
-    """Native folder picker on the machine running the server (it's always local)."""
-    import tkinter
-    from tkinter import filedialog
-
-    root = tkinter.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    try:
-        chosen = filedialog.askdirectory(
-            initialdir=str(initial if initial.exists() else Path.home()),
-            title="Choose where TuneGrab saves music",
-            parent=root,
-        )
-    finally:
-        root.destroy()
-    return chosen or None
-
-
 class OpenRequest(BaseModel):
     path: str | None = None
 
 
 class FixRequest(BaseModel):
     youtube_url: str
+
+
+class ReviewRequest(BaseModel):
+    """A saved song (its archive key) and, to swap it, the video to use instead."""
+
+    key: str = Field(min_length=1, max_length=2000)
+    video_id: str | None = Field(default=None, max_length=64)
+
+
+class PlaylistRequest(BaseModel):
+    """A playlist TuneGrab has downloaded before (its ID in the download history)."""
+
+    id: str = Field(min_length=1, max_length=400)
+    # a CSV playlist is checked against a new export of it
+    csv_text: str | None = Field(default=None, max_length=20_000_000)
+    # deleting files: the songs to delete, and the user's explicit go-ahead
+    keys: list[str] = Field(default_factory=list, max_length=20_000)
+    confirm: bool = False
+
+
+def gone_payload(services: Services, playlist_id: str) -> list[dict[str, Any]]:
+    """Songs that left a playlist and are waiting for the user's decision."""
+    archive = services.archive
+    listed = playlist_sync.describe(
+        archive, playlist_id, playlist_sync.pending(archive, playlist_id)
+    )
+    return [
+        {
+            "key": item.track.key,
+            "title": item.track.title,
+            "artists": item.track.artists,
+            "state": item.state,
+            "path": str(item.path) if item.path else None,
+        }
+        for item in listed
+    ]
+
+
+def library_review(services: Services, record: DownloadRecord) -> dict[str, Any] | None:
+    """ "Check this match" for a Library song: the saved video and the other candidates."""
+    if not record.review:
+        return None
+    saved = services.archive.match_record(record.key)
+    if saved is None or saved.candidate.video_id != record.video_id:
+        return review_payload(record.review, None, [])  # the candidates weren't kept
+    current = candidate_payload(saved.candidate, saved.score, saved.reason)
+    return review_payload(record.review, current, saved.alternatives)
 
 
 def manual_candidate(services: Services, track: Track, video_id: str) -> Candidate:
@@ -589,8 +266,9 @@ def create_app(
     allowed_hosts: set[str] | None = None,
 ) -> FastAPI:
     owned = services is None
-    services = services or build_services(settings or Settings())
+    services = services or build_services(settings or keep_earlier_defaults(Settings()))
     manager = JobManager(services)
+    updates = UpdateChecker(services.http, data_dir() / "update-check.json")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -598,12 +276,28 @@ def create_app(
         yield
         for pipeline in list(manager.pipelines.values()):
             pipeline.cancel()
+        if manager._background:  # let workers stop and record what they did
+            _done, pending = await asyncio.wait(manager._background, timeout=SHUTDOWN_WAIT_S)
+            if pending:
+                log.warning("%d job(s) still busy at shutdown", len(pending))
         if owned:
             services.close()
 
     app = FastAPI(title="TuneGrab", version=__version__, lifespan=lifespan)
     app.state.manager = manager
     hosts = set(LOCAL_HOSTS) | (allowed_hosts or set())
+
+    @app.exception_handler(TuneGrabError)
+    async def expected_error(request: Request, exc: TuneGrabError) -> JSONResponse:
+        """An error an endpoint didn't catch itself but that has a user message."""
+        status = 502 if isinstance(exc, NetworkError) else 400
+        return JSONResponse({"detail": str(exc)}, status_code=status)
+
+    @app.exception_handler(Exception)
+    async def unexpected(request: Request, exc: Exception) -> JSONResponse:
+        """Last resort: log the traceback, show a plain sentence, never a stack trace."""
+        log.error("unhandled error in %s %s", request.method, request.url.path, exc_info=exc)
+        return JSONResponse({"detail": unexpected_error(exc)}, status_code=500)
 
     @app.middleware("http")
     async def local_only(request: Request, call_next: Any) -> Response:
@@ -635,6 +329,8 @@ def create_app(
                 ],
             )
         checks = system_cache["checks"]
+        if services.settings.check_updates:
+            updates.check_in_background()  # at most once a day; shows on a later refresh
         return {
             "version": __version__,
             "ok": all(c["status"] != "fail" for c in checks),
@@ -646,8 +342,16 @@ def create_app(
                 "config": str(config_file()),
             },
             "default_folder": "output_dir" not in read_config_file(),
-            "failures": len(services.archive.open_failures()),
+            "failures": len(services.archive.open_failures())
+            + len(services.archive.video_failures()),
+            "warnings": list(startup_warnings),
+            "updates": updates.info().payload() if services.settings.check_updates else None,
         }
+
+    @app.delete("/api/system/warnings")
+    def dismiss_warnings() -> dict[str, Any]:
+        startup_warnings.clear()
+        return {"warnings": []}
 
     @app.get("/api/history")
     def history() -> list[dict[str, Any]]:
@@ -703,26 +407,26 @@ def create_app(
             raise HTTPException(409, str(exc)) from exc
         return job_summary(job)
 
+    def static_file(name: str, media_type: str) -> Response:
+        body = files("tunegrab.web").joinpath(f"static/{name}").read_text(encoding="utf-8")
+        # no-cache: the browser revalidates, so an updated TuneGrab never runs old scripts
+        return Response(body, media_type=media_type, headers={"Cache-Control": "no-cache"})
+
     @app.get("/", response_class=HTMLResponse)
-    def index() -> str:
-        return files("tunegrab.web").joinpath("static/index.html").read_text(encoding="utf-8")
+    def index() -> Response:
+        return static_file("index.html", "text/html; charset=utf-8")
+
+    @app.get("/app.js")
+    def app_js() -> Response:
+        return static_file("app.js", "text/javascript; charset=utf-8")
+
+    @app.get("/app.css")
+    def app_css() -> Response:
+        return static_file("app.css", "text/css; charset=utf-8")
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
         return {"ok": True, "version": __version__, "metadata": services.resolver.provider_names}
-
-    @app.get("/api/preview")
-    async def preview(url: str) -> dict[str, Any]:
-        try:
-            collection = await asyncio.to_thread(services.resolver.resolve, url)
-        except InvalidURLError as exc:
-            raise HTTPException(400, str(exc)) from exc
-        except NotFoundError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        except MetadataError as exc:
-            raise HTTPException(502, str(exc)) from exc
-        data = collection.model_dump(mode="json")
-        return data
 
     @app.post("/api/video", status_code=202)
     async def create_video_job(request: VideoRequest) -> dict[str, Any]:
@@ -737,21 +441,50 @@ def create_app(
         return job_summary(await manager.submit_video(request))
 
     @app.post("/api/jobs", status_code=202)
-    async def create_job(request: JobRequest) -> dict[str, Any]:
+    async def create_job(request: JobRequest) -> Any:
         sources = [
             bool(request.url and request.url.strip()),
             bool(request.ytm_album),
             bool(request.spotify_tracks),
             bool(request.csv_text and request.csv_text.strip()),
+            bool(request.ytm_songs),
         ]
         if sum(sources) != 1:
-            raise HTTPException(400, "Give one of url, ytm_album, spotify_tracks or csv_text")
+            raise HTTPException(
+                400, "Give one of url, ytm_album, ytm_songs, spotify_tracks or csv_text"
+            )
         if request.url and is_video_link(request.url) and not request.track_ids:
             # "Download now" on a YouTube (etc.) link: the video's audio, as music
             video = VideoRequest(url=request.url, mode="audio", format=request.format)
             return job_summary(await manager.submit_video(video))
+        if request.url and not request.track_ids and not is_spotify_input(request.url):
+            return await download_search(request.url.strip(), request)
         job = await manager.submit(request)
         return job_summary(job)
+
+    async def download_search(text: str, request: JobRequest) -> Any:
+        """Download now on typed text: the top song, named up front. An artist's name
+        isn't a song, so the page is sent to Browse instead (409 with ``browse``)."""
+        try:
+            artist = await asyncio.to_thread(services.browser.ytmusic.named_artist, text)
+        except SearchError as exc:  # still worth trying the song search
+            log.warning("artist check failed for %r: %s", text, exc)
+            artist = None
+        if artist is not None:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": f"\u201c{artist.name}\u201d is an artist. Pick albums or songs.",
+                    "browse": text,
+                },
+            )
+        try:
+            built = await asyncio.to_thread(services.pipeline().build_job, text)
+        except LookupError as exc:
+            raise HTTPException(
+                404, f"Nothing on YouTube Music matches \u201c{text}\u201d."
+            ) from exc
+        return job_summary(await manager.submit(request, built))
 
     def _browse_error(exc: Exception) -> HTTPException:
         if isinstance(exc, InvalidURLError):
@@ -762,7 +495,8 @@ def create_app(
 
     @app.get("/api/browse")
     async def browse(url: str) -> dict[str, Any]:
-        """Artist -> its releases; album/playlist/track -> its tracks; plain text -> artist."""
+        """Artist -> its releases; album/playlist/track -> its tracks; plain text -> the
+        artist it names, or matching albums and songs."""
         text = url.strip()
         if is_video_link(text):
             try:
@@ -781,8 +515,10 @@ def create_app(
             if not is_spotify_input(text):
                 if not text:
                     raise InvalidURLError("Paste a Spotify link or type an artist name")
-                overview = await asyncio.to_thread(services.browser.ytmusic.artist, text)
-                return {"type": "artist", **overview.model_dump(mode="json")}
+                hits = await asyncio.to_thread(services.browser.ytmusic.lookup, text)
+                if isinstance(hits, SearchResults):
+                    return {"type": "search", **hits.model_dump(mode="json")}
+                return {"type": "artist", **hits.model_dump(mode="json")}
             ref = await asyncio.to_thread(services.resolver.parse, text)
             if ref.kind == "artist":
                 overview = await asyncio.to_thread(services.browser.spotify_artist, ref.id)
@@ -793,9 +529,9 @@ def create_app(
         return {"type": "collection", **release_payload(collection)}
 
     @app.get("/api/browse/ytmusic")
-    async def browse_ytmusic(artist: str) -> dict[str, Any]:
+    async def browse_ytmusic(artist: str, channel: str | None = None) -> dict[str, Any]:
         try:
-            overview = await asyncio.to_thread(services.browser.ytmusic.artist, artist)
+            overview = await asyncio.to_thread(services.browser.ytmusic.artist, artist, channel)
         except (MetadataError, SearchError) as exc:
             raise _browse_error(exc) from exc
         return {"type": "artist", **overview.model_dump(mode="json")}
@@ -825,7 +561,7 @@ def create_app(
     def _job(job_id: str) -> Job:
         job = manager.jobs.get(job_id)
         if job is None:
-            raise HTTPException(404, "No such job")
+            raise HTTPException(404, "That download isn't in the list any more. Reload the page.")
         return job
 
     @app.get("/api/jobs/{job_id}")
@@ -849,6 +585,8 @@ def create_app(
         task = next((t for t in job.tasks if t.id == task_id), None)
         if task is None:
             raise HTTPException(404, "No such song in this download")
+        if job_id in manager.video_jobs:
+            raise HTTPException(409, "Videos are downloaded from their own link; press Retry.")
         if task.status != TaskStatus.FAILED:
             raise HTTPException(409, "Only failed songs can be given a link here")
         try:
@@ -862,6 +600,37 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
         return job_summary(retried)
+
+    @app.post("/api/review/choose", status_code=202)
+    async def review_choose(body: ReviewRequest) -> dict[str, Any]:
+        """Swap a saved song for another of the videos found for it."""
+        if not body.video_id:
+            raise HTTPException(400, "Choose one of the other matches.")
+        try:
+            job = manager.choose_match(body.key, body.video_id)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return job_summary(job)
+
+    @app.post("/api/review/keep")
+    async def review_keep(body: ReviewRequest) -> dict[str, Any]:
+        """The saved match is right: stop asking about it."""
+        try:
+            manager.keep_match(body.key)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return {"kept": body.key}
+
+    @app.post("/api/jobs/{job_id}/resume")
+    def resume_job(job_id: str) -> dict[str, Any]:
+        job = _job(job_id)
+        try:
+            manager.resume(job_id)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return job_summary(job)
 
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel_job(job_id: str) -> dict[str, Any]:
@@ -888,12 +657,134 @@ def create_app(
                     "path": str(r.path),
                     "exists": r.exists,
                     "format": r.format,
+                    "source": r.source,
+                    "low_quality": r.low_quality,
+                    "review": library_review(services, r),
                     "downloaded_at": r.downloaded_at,
                 }
                 for r in records
             ],
-            "playlists": services.archive.playlists(),
+            "playlists": [
+                {
+                    **p,
+                    "csv": p["playlist_id"].startswith("csv:"),
+                    # songs that left it and still have a file here
+                    "removed": sum(
+                        g["state"] == "file" for g in gone_payload(services, p["playlist_id"])
+                    ),
+                }
+                for p in services.archive.playlists()
+            ],
+            "videos": [
+                {
+                    "key": v.key,
+                    "url": v.url,
+                    "title": v.entry.get("title") or v.url,
+                    "uploader": v.entry.get("uploader") or "",
+                    "duration_s": v.entry.get("duration_s"),
+                    "mode": v.options.get("mode"),
+                    "clip": v.options.get("start") is not None or v.options.get("end") is not None,
+                    "format": v.format,
+                    "source": v.source,
+                    "path": str(v.path) if v.path else None,
+                    "exists": v.exists,
+                    "downloaded_at": v.updated_at,
+                }
+                for v in services.archive.all_videos()
+            ],
         }
+
+    def _playlist(playlist_id: str) -> str:
+        name = services.archive.playlist_name(playlist_id)
+        if name is None:
+            raise HTTPException(404, "TuneGrab has no record of that playlist any more.")
+        return name
+
+    def _fetch_playlist(playlist_id: str, name: str, csv_text: str | None) -> Collection:
+        """The playlist as it is now (Spotify, or the CSV export the user just chose)."""
+        if playlist_id.startswith("csv:"):
+            return collection_from_csv(
+                csv_text or "",
+                name,
+                lookup=lambda tid: services.resolver.resolve_ref(SpotifyRef("track", tid)).tracks[
+                    0
+                ],
+            )
+        if playlist_id == "liked":
+            return services.resolver.resolve_ref(SpotifyRef("liked", ""))
+        return services.resolver.resolve_ref(SpotifyRef("playlist", playlist_id))
+
+    @app.post("/api/playlists/sync", status_code=202)
+    async def sync_playlist(body: PlaylistRequest) -> dict[str, Any]:
+        """Check a saved playlist for changes: download what's new, list what left.
+        Nothing is deleted here."""
+        name = _playlist(body.id)
+        if body.id.startswith("csv:") and not (body.csv_text and body.csv_text.strip()):
+            raise HTTPException(400, "Choose the playlist's new CSV file.")
+        if any(
+            j.collection is not None
+            and j.collection.id == body.id
+            and not (j.finished_at or j.error)
+            for j in manager.jobs.values()
+        ):
+            raise HTTPException(409, "This playlist is already being downloaded. See Downloads.")
+        archive = services.archive
+        before = playlist_sync.remembered(archive, body.id)  # before the job re-saves it
+        known = {track.key for _, track in archive.playlist_members(body.id)}
+        try:
+            collection = await asyncio.to_thread(_fetch_playlist, body.id, name, body.csv_text)
+        except CsvImportError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except (InvalidURLError, MetadataError) as exc:
+            raise _browse_error(exc) from exc
+        collection.id = body.id
+        complete = playlist_sync.is_complete(collection)
+        playlist_sync.note_departures(archive, body.id, before, collection)
+        tasks = [TrackTask(track=t, position=i) for i, t in enumerate(collection.tracks, start=1)]
+        built = Job(input=collection.name, collection=collection, tasks=tasks)
+        job = await manager.submit(JobRequest(name=collection.name), built)
+        return {
+            "job": job_summary(job),
+            "name": collection.name,
+            "new": len({t.key for t in collection.tracks} - known),
+            # False: only part of the playlist could be read, so departures are unknown
+            "complete": complete,
+            "listed": len(collection.tracks),
+            "total": collection.total,
+            "gone": gone_payload(services, body.id),
+        }
+
+    @app.get("/api/playlists/removed")
+    def playlist_removed(id: str) -> dict[str, Any]:
+        return {"id": id, "name": _playlist(id), "gone": gone_payload(services, id)}
+
+    @app.post("/api/playlists/removed/delete")
+    async def playlist_delete_removed(body: PlaylistRequest) -> dict[str, Any]:
+        """Delete the files of songs that left a playlist. Only the named songs, only with
+        ``confirm`` (the page shows every file first), never one another playlist has."""
+        _playlist(body.id)
+        if not body.confirm or not body.keys:
+            raise HTTPException(400, "Nothing was deleted: choose the files and confirm first.")
+        result = await asyncio.to_thread(
+            playlist_sync.remove_files, services.archive, body.id, set(body.keys)
+        )
+        if result.deleted and services.settings.playlist_mode == "m3u":
+            try:
+                services.pipeline().write_playlist_file(body.id)
+            except OSError as exc:
+                log.warning("could not rewrite the playlist file of %s: %s", body.id, exc)
+        return {
+            "deleted": [str(item.path) for item in result.deleted],
+            "failed": [{"path": str(item.path), "reason": why} for item, why in result.failed],
+            "gone": gone_payload(services, body.id),
+        }
+
+    @app.post("/api/playlists/removed/keep")
+    def playlist_keep_removed(body: PlaylistRequest) -> dict[str, Any]:
+        """Keep the files of the songs that left; stop listing them."""
+        _playlist(body.id)
+        playlist_sync.keep_files(services.archive, body.id)
+        return {"gone": []}
 
     @app.get("/api/settings")
     def get_settings() -> dict[str, Any]:
@@ -904,29 +795,50 @@ def create_app(
         try:
             services.settings = apply_settings(services.settings, changes)
         except (KeyError, ValueError, TemplateError) as exc:
-            raise HTTPException(400, str(exc)) from exc
+            raise HTTPException(400, setting_error(exc)) from exc
         return settings_payload(services.settings)
+
+    picker_open = threading.Lock()  # Tk allows one dialog at a time; a second one crashes
 
     @app.post("/api/pick-folder")
     async def post_pick_folder() -> dict[str, Any]:
+        if not picker_open.acquire(blocking=False):
+            raise HTTPException(
+                409, "The folder window is already open. It may be behind another window."
+            )
         try:
             chosen = await asyncio.to_thread(pick_folder, services.settings.resolved_output_dir)
         except Exception as exc:  # no display / no tkinter
-            raise HTTPException(501, f"Folder picker unavailable: {exc}") from exc
+            log.warning("folder picker failed: %s", exc)
+            raise HTTPException(
+                501, "The folder window couldn't open here. Type the full folder path instead."
+            ) from exc
+        finally:
+            picker_open.release()
         return {"path": chosen}
 
     @app.post("/api/open")
     def post_open(body: OpenRequest) -> dict[str, Any]:
+        """Show the music folder, the video folder, or a file TuneGrab saved, in the file
+        manager. Anything else is refused: the page must not open arbitrary paths."""
         root = services.settings.resolved_output_dir.resolve()
+        roots = (root, services.settings.resolved_video_dir.resolve())
         target = Path(body.path).resolve() if body.path else root
-        if target != root and root not in target.parents:
-            raise HTTPException(400, "Only files inside the library can be opened")
+        inside = any(target == r or r in target.parents for r in roots)
+        recorded = body.path is not None and (
+            services.archive.path_is_recorded(Path(body.path))
+            or services.archive.path_is_recorded(target)
+        )
+        if not (inside or recorded):
+            raise HTTPException(400, "TuneGrab only opens your music and video folders.")
         if not target.exists():
-            if target == root:
-                root.mkdir(parents=True, exist_ok=True)
-            else:
-                raise HTTPException(404, "File not found")
-        open_in_file_manager(target)
+            if target not in roots:
+                raise HTTPException(404, "That file isn't there any more (moved or deleted?).")
+            target.mkdir(parents=True, exist_ok=True)
+        try:
+            open_in_file_manager(target)
+        except OSError as exc:
+            raise HTTPException(500, f"Couldn't open the file manager: {exc}") from exc
         return {"opened": str(target)}
 
     @app.get("/api/events")

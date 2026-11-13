@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import time
 from pathlib import Path
 
 import pytest
@@ -25,6 +27,12 @@ def test_report_and_clean(env: Settings, tmp_path: Path) -> None:
     tmp = env.resolved_output_dir / storage.TMP_DIR_NAME / "task-x"
     tmp.mkdir(parents=True)
     (tmp / "part.webm").write_bytes(b"x" * 1000)
+    old = time.time() - 2 * storage.IN_USE_S
+    for p in (tmp, tmp / "part.webm"):
+        os.utime(p, (old, old))
+    running = env.resolved_output_dir / storage.TMP_DIR_NAME / "task-now"
+    running.mkdir()
+    (running / "part.webm").write_bytes(b"")  # a download in progress: must survive
     song = env.resolved_output_dir / "Artist" / "song.mp3"
     song.parent.mkdir(parents=True)
     song.write_bytes(b"music")
@@ -50,7 +58,7 @@ def test_report_and_clean(env: Settings, tmp_path: Path) -> None:
     results = {r.key: r for r in storage.clean(env)}
     assert results["tmp"].freed == 1000 and results["logs"].freed == 500
     assert results["database"].freed > 100_000
-    assert not (env.resolved_output_dir / storage.TMP_DIR_NAME).exists()
+    assert not tmp.exists() and (running / "part.webm").exists()
     assert not (logs / "tunegrab.log.1").exists() and (logs / "tunegrab.log").exists()
     assert not (tmp_path / "cache" / "yt-dlp").exists()
     assert song.read_bytes() == b"music"  # music is never touched

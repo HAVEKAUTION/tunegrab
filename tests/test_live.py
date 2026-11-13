@@ -11,6 +11,7 @@ import pytest
 from tunegrab.config import Settings
 from tunegrab.metadata.spotify_embed import SpotifyEmbedProvider
 from tunegrab.net import HttpClient
+from tunegrab.pipeline import RATE_LIMIT_GAVE_UP
 from tunegrab.services import build_services
 from tunegrab.urls import parse_spotify_url
 
@@ -56,9 +57,13 @@ def test_full_download(tmp_path: Path) -> None:
     services = build_services(settings)
     try:
         pipeline = services.pipeline()
+        # Don't sit out YouTube's hour-long block in a test: give up after the strikes.
+        pipeline.rate_limit_pause = pipeline.rate_limit_block = 0.0
         job = asyncio.run(pipeline.run(pipeline.build_job(TRACK)))
     finally:
         services.close()
+    if job.error == RATE_LIMIT_GAVE_UP:
+        pytest.skip("YouTube is rate-limiting this connection right now; try again in an hour")
     task = job.tasks[0]
     assert task.status.value == "done", task.error
     assert task.path

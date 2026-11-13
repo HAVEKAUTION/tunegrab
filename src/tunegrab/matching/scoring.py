@@ -37,6 +37,7 @@ SUBSET_ARTIST_SCORE = 85.0
 TITLE_ONLY_ARTIST_SCORE = 70.0
 ARTIST_MISMATCH_BELOW = 50.0
 ARTIST_MISMATCH_PENALTY = 20.0
+REVIEW_BELOW = 85.0  # accepted matches under this are shown as "Check this match"
 
 # Matched on lowercase, accent-free text with "-" turned into spaces.
 PENALTY_WORDS: tuple[str, ...] = (
@@ -210,6 +211,19 @@ def duration_score(track: Track, candidate: Candidate) -> float | None:
     else:
         value = 1.0 - (diff - DURATION_FULL_S) / (DURATION_ZERO_S - DURATION_FULL_S)
     return max(value, 0.5) if padded_music_video(track, candidate) else value
+
+
+def review_note(track: Track, candidate: Candidate, value: float) -> str | None:
+    """Why an accepted match deserves a second look, or None when it doesn't. A version
+    word costs 30 points, so every penalised match is also under REVIEW_BELOW."""
+    if candidate.source == "manual" or value >= REVIEW_BELOW:
+        return None
+    bad = penalty_words(track.title, candidate.title, track.artists, candidate.artists)
+    if bad:
+        return (
+            f"The video says \u201c{bad[0]}\u201d and the song doesn't: it may be another version."
+        )
+    return f"Low match score ({value:.0f} of 100): it may be the wrong recording."
 
 
 def score(track: Track, candidate: Candidate) -> tuple[float, str]:

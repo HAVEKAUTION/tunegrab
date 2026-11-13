@@ -12,6 +12,7 @@ from tunegrab import video
 from tunegrab.config import Settings
 from tunegrab.download.ytdlp import DownloadError
 from tunegrab.models import TaskStatus
+from tunegrab.pacing import Pacer
 from tunegrab.urls import is_video_link
 from tunegrab.video import (
     VideoDownloader,
@@ -262,7 +263,10 @@ def _pipeline(
 ) -> tuple[VideoPipeline, Any]:
     config = Settings(_env_file=None, output_dir=tmp_path / "lib", **settings)
     job, entries = build_job(_probe(n), VideoOptions())
-    return VideoPipeline(config, VideoOptions(), entries, downloader=stub, retry_backoff=0), job
+    pipeline = VideoPipeline(
+        config, VideoOptions(), entries, downloader=stub, retry_backoff=0, pacer=Pacer(0)
+    )
+    return pipeline, job
 
 
 def test_pipeline_saves_and_skips_existing(tmp_path: Path) -> None:
@@ -297,3 +301,72 @@ def test_audio_mode_goes_to_the_music_folder(tmp_path: Path) -> None:
     pipeline = VideoPipeline(config, options, {}, downloader=StubDownloader())
     assert pipeline.root == tmp_path / "lib"
     assert final_path(pipeline.root, entry, options, "mp3").name == "Video 0 [vid00000000].mp3"
+
+
+def test_unexpected_error_fails_one_video_and_the_job_continues(tmp_path: Path) -> None:
+    stub = StubDownloader(fail=[KeyError("formats")])
+    pipeline, job = _pipeline(tmp_path, stub, n=2, retries=0)
+    asyncio.run(pipeline.run(job))
+    assert [t.status for t in job.tasks] == [TaskStatus.FAILED, TaskStatus.DONE]
+    assert "KeyError" in (job.tasks[0].error or "")
+    assert job.finished_at is not None
+
+
+def test_refused_video_says_to_update_ytdlp(tmp_path: Path) -> None:
+    from tunegrab.download.ytdlp import BREAKAGE_HINT
+
+    stub = StubDownloader(fail=[DownloadError("HTTP Error 403: Forbidden")])
+    pipeline, job = _pipeline(tmp_path, stub, retries=0)
+    asyncio.run(pipeline.run(job))
+    assert job.tasks[0].status == TaskStatus.FAILED
+    assert BREAKAGE_HINT in (job.tasks[0].error or "")
+
+
+# --- download history for videos (C4) -------------------------------------------------------
+def _archived(tmp_path: Path, stub: StubDownloader, options: VideoOptions) -> tuple[Any, Any]:
+    from tunegrab.library.archive import Archive
+
+    archive = Archive(tmp_path / "archive.db")
+    config = Settings(_env_file=None, output_dir=tmp_path / "lib", retries=0)
+    job, entries = build_job(_probe(), options)
+    pipeline = VideoPipeline(
+        config, options, entries, downloader=stub, retry_backoff=0, pacer=Pacer(0), archive=archive
+    )
+    return pipeline, job
+
+
+def test_saved_video_is_recorded_and_skipped_next_time(tmp_path: Path) -> None:
+    stub = StubDownloader()
+    pipeline, job = _archived(tmp_path, stub, VideoOptions())
+    asyncio.run(pipeline.run(job))
+    assert job.tasks[0].status == TaskStatus.DONE
+    assert pipeline.archive is not None
+    [record] = pipeline.archive.all_videos()
+    assert record.url == "https://youtu.be/vid00000000" and record.exists
+    assert record.options["mode"] == "video" and record.source.startswith("1080p")
+    # renamed by the user: the history still knows where it is, so no second download
+    moved = record.path.with_name("renamed.mp4")  # type: ignore[union-attr]
+    record.path.rename(moved)  # type: ignore[union-attr]
+    pipeline.archive.record_video(record.key, record.entry, record.options, None, moved, "x")
+    again, job2 = _archived(tmp_path, stub, VideoOptions())
+    asyncio.run(again.run(job2))
+    assert job2.tasks[0].status == TaskStatus.SKIPPED and job2.tasks[0].path == str(moved)
+    assert len(stub.urls) == 1
+    # the same link with other options is a different download
+    clip, job3 = _archived(tmp_path, stub, VideoOptions(quality="720"))
+    asyncio.run(clip.run(job3))
+    assert len(stub.urls) == 2
+
+
+def test_failed_video_is_remembered_until_it_succeeds(tmp_path: Path) -> None:
+    stub = StubDownloader(fail=[DownloadError("Video unavailable")])
+    pipeline, job = _archived(tmp_path, stub, VideoOptions(mode="audio"))
+    asyncio.run(pipeline.run(job))
+    assert pipeline.archive is not None
+    [failed] = pipeline.archive.video_failures()
+    assert failed.error and "unavailable" in failed.error and failed.format == "mp3"
+    assert failed.entry["title"] == "Video 0"
+    ok, job2 = _archived(tmp_path, stub, VideoOptions(mode="audio"))
+    asyncio.run(ok.run(job2))
+    assert pipeline.archive.video_failures() == []
+    assert len(pipeline.archive.all_videos()) == 1

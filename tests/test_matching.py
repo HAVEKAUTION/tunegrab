@@ -2,10 +2,20 @@ from typing import Any
 
 import pytest
 
-from tests.fakes import FakeAudio, FakeYTMusicClient, candidate_for, make_track
+from tests.fakes import (
+    COVER_VIDEO,
+    LIVE_VIDEO,
+    STUDIO_VIDEO,
+    FakeAudio,
+    FakeYTMusicClient,
+    candidate_for,
+    doubtful_candidates,
+    make_track,
+)
 from tunegrab.library.archive import Archive
 from tunegrab.matching.base import SearchError, build_query, parse_duration
 from tunegrab.matching.matcher import Matcher
+from tunegrab.matching.scoring import review_note
 from tunegrab.matching.youtube import candidate_from_info, clean_channel
 from tunegrab.matching.ytmusic import (
     YTMusicClient,
@@ -133,3 +143,41 @@ def test_matcher_does_not_cache_rejects(tmp_path: Any) -> None:
     bad = FakeAudio(results={t.title: [candidate_for(t, title="Other", artists=["Z"])]})
     Matcher([bad], cache=archive).match(t)
     assert archive.get_match(t.key) is None
+
+
+# --- match review ---------------------------------------------------------------------
+
+
+def test_matcher_keeps_the_next_best_videos(tmp_path: Any) -> None:
+    archive = Archive(tmp_path / "a.db")
+    t = make_track(1)
+    matcher = Matcher([FakeAudio(results={t.title: doubtful_candidates(t)})], cache=archive)
+    match = matcher.match(t)
+    assert match.candidate is not None and match.candidate.video_id == LIVE_VIDEO
+    assert match.score == 70
+    # best first, the chosen video left out, a video found twice listed once
+    assert [a.candidate.video_id for a in match.alternatives] == [STUDIO_VIDEO, COVER_VIDEO]
+    assert match.alternatives[0].score > match.alternatives[1].score
+    saved = archive.match_record(t.key)
+    assert saved is not None and not saved.manual
+    assert [a.candidate.video_id for a in saved.alternatives] == [STUDIO_VIDEO, COVER_VIDEO]
+
+
+def test_matcher_keeps_at_most_three_alternatives() -> None:
+    t = make_track(1)
+    many = [candidate_for(t, video_id=f"video{n:06d}", duration_s=200 + n) for n in range(8)]
+    match = Matcher([FakeAudio(results={t.title: many})]).match(t)
+    assert len(match.alternatives) == 3
+    assert match.candidate is not None
+    assert match.candidate.video_id not in {a.candidate.video_id for a in match.alternatives}
+
+
+def test_review_note() -> None:
+    t = make_track(1)
+    live = candidate_for(t, title="Song 1 (Live)", source="youtube")
+    note = review_note(t, live, 70)
+    assert note is not None and "live" in note
+    plain = review_note(t, candidate_for(t, source="youtube"), 80)
+    assert plain is not None and "80 of 100" in plain
+    assert review_note(t, candidate_for(t), 85) is None  # sure enough
+    assert review_note(t, live.model_copy(update={"source": "manual"}), 70) is None  # chosen

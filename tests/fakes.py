@@ -15,6 +15,7 @@ from tunegrab.metadata.base import NotFoundError
 from tunegrab.metadata.resolver import Resolver
 from tunegrab.models import Candidate, Collection, Track
 from tunegrab.net import HttpClient
+from tunegrab.pacing import Pacer
 from tunegrab.pipeline import Pipeline
 from tunegrab.services import Services
 
@@ -84,6 +85,26 @@ class FakeMetadata:
         )
 
 
+LIVE_VIDEO, STUDIO_VIDEO, COVER_VIDEO = "live0000001", "studio00002", "cover000003"
+
+
+def doubtful_candidates(track: Track) -> list[Candidate]:
+    """Search results where a live version wins narrowly (score 70: "check this match"),
+    ahead of a long studio upload and a cover by someone else."""
+    return [
+        candidate_for(track, video_id=LIVE_VIDEO, title=f"{track.title} (Live)", source="youtube"),
+        candidate_for(
+            track,
+            video_id=STUDIO_VIDEO,
+            artists=[f"{track.primary_artist} VEVO"],
+            duration_s=230,
+            source="youtube",
+        ),
+        candidate_for(track, video_id=COVER_VIDEO, artists=["Somebody Else"], source="youtube"),
+        candidate_for(track, video_id=STUDIO_VIDEO, duration_s=230, source="ytmusic_video"),
+    ]
+
+
 def candidate_for(track: Track, **extra: Any) -> Candidate:
     data: dict[str, Any] = {
         "video_id": (track.spotify_id or "x" * 11)[-11:],
@@ -119,6 +140,44 @@ class FakeAudio:
         return [candidate_for(track)]
 
 
+SEARCH_ALBUMS: list[dict[str, Any]] = [
+    {
+        "_terms": "discovery daft punk",
+        "resultType": "album",
+        "title": "Discovery",
+        "type": "Album",
+        "year": "2001",
+        "browseId": "MPREb_disc",
+        "artists": [{"name": "Daft Punk", "id": "UCdaft"}],
+        "thumbnails": [{"url": "https://lh3/disc=w226-h226", "width": 226, "height": 226}],
+    },
+    {"_terms": "discovery daft punk", "resultType": "album", "title": "No ID"},
+]
+SEARCH_SONGS: dict[str, list[dict[str, Any]]] = {
+    "one more time": [
+        {
+            "resultType": "song",
+            "videoId": "FGBhQbmPwH8",
+            "title": "One More Time",
+            "artists": [{"name": "Daft Punk", "id": "UCdaft"}],
+            "album": {"name": "Discovery", "id": "MPREb_disc"},
+            "duration_seconds": 320,
+            "thumbnails": [{"url": "https://lh3/omt=w60-h60", "width": 60, "height": 60}],
+        },
+        {
+            "resultType": "song",
+            "videoId": "cover123456",
+            "title": "One More Time (Cover)",
+            "artists": [{"name": "Somebody"}],
+            "album": None,
+            "isExplicit": True,
+        },
+        {"resultType": "song", "title": "No video"},
+    ],
+    "nothing at all": [],
+}
+
+
 class FakeYTMusicClient:
     """Stands in for ytmusicapi.YTMusic."""
 
@@ -134,13 +193,33 @@ class FakeYTMusicClient:
             }
         ]
 
-    def search(self, query: str, filter: str, limit: int) -> list[dict[str, Any]]:
+    def search(
+        self, query: str, filter: str | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]:
         if filter == "artists":
             return [
                 {"artist": "Someone Else", "browseId": "UCother"},
                 {"artist": "Fake Band", "browseId": "UCfake"},
             ]
+        if filter is None:  # everything, YouTube Music's top result first
+            return self.everything(query)
+        if filter == "albums":
+            return [a for a in SEARCH_ALBUMS if query.lower() in a["_terms"]]
+        if filter == "songs" and query.lower() in SEARCH_SONGS:
+            return SEARCH_SONGS[query.lower()]
         return self.results
+
+    @staticmethod
+    def everything(query: str) -> list[dict[str, Any]]:
+        band = {"resultType": "artist", "artists": [{"name": "Fake Band", "id": "UCfake"}]}
+        daft = {"resultType": "artist", "artists": [{"name": "Daft Punk", "id": "UCdaft"}]}
+        if query.lower() in ("fake band", "daft punk"):
+            return [band if query.lower() == "fake band" else daft]
+        if query.lower() == "one more time":  # a band of that name exists, but isn't on top
+            top = {"resultType": "song", "title": "One More Time", "videoId": "FGBhQbmPwH8"}
+            other = {"resultType": "artist", "artists": [{"name": "One More Time", "id": "UComt"}]}
+            return [top, other, daft]
+        return [{"resultType": "album", "title": "Discovery", "browseId": "MPREb_disc"}, daft]
 
     def get_artist(self, channel: str) -> dict[str, Any]:
         thumbs = [{"url": "https://lh3/a=w60-h60", "width": 60, "height": 60}]
@@ -221,6 +300,8 @@ class FakeDownloader:
         self.unavailable = unavailable or set()  # video IDs that are "Video unavailable"
         self.rate_limited_times = rate_limited_times
         self.downloaded: list[str] = []
+        self.content: dict[str, bytes] = {}  # video ID -> the bytes of its file
+        self.low_quality: set[str] = set()  # video IDs YouTube only has in format 18
         self.calls = 0
         self.block = block
         self.started = started
@@ -257,8 +338,10 @@ class FakeDownloader:
         if progress:
             progress(0.5, "downloading")
             progress(1.0, "converting")
-        out.write_bytes(b"audio")
-        if source is not None:
+        out.write_bytes(self.content.get(video_id, b"audio"))
+        if source is not None and video_id in self.low_quality:
+            source(SourceInfo(format_id="18", codec="mp4a.40.2", bitrate_kbps=96))
+        elif source is not None:
             source(SourceInfo(format_id="251", codec="opus", bitrate_kbps=129))
         with self.lock:
             self.downloaded.append(video_id)
@@ -268,11 +351,16 @@ class FakeDownloader:
 class FakeTagger:
     def __init__(self) -> None:
         self.tagged: list[tuple[Path, Track, bytes | None, str | None]] = []
+        self.tags: dict[str, tuple[str, str]] = {}  # file name -> (title, artist)
 
     def tag(
         self, path: Path, track: Track, cover: bytes | None = None, lyrics: str | None = None
     ) -> None:
         self.tagged.append((path, track, cover, lyrics))
+        self.tags[path.name] = (track.title, ", ".join(track.artists))
+
+    def identify(self, path: Path) -> tuple[str, str] | None:
+        return self.tags.get(path.name) if path.exists() else None
 
 
 def make_pipeline(
@@ -296,6 +384,8 @@ def make_pipeline(
         cover_fetcher=lambda url: b"\xff\xd8\xffcover",
         retry_backoff=0.0,
         rate_limit_pause=0.0,
+        rate_limit_block=0.0,
+        pacer=Pacer(0),
     )
     return pipeline, archive
 
@@ -334,6 +424,7 @@ class FakeServices(Services):
             query_lookup=self.lookup_query,
             on_event=on_event,
             retry_backoff=0.0,
+            pacer=Pacer(0),
         )
 
 

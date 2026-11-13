@@ -19,6 +19,7 @@ from importlib.metadata import version as package_version
 from pathlib import Path
 
 from tunegrab.config import Settings
+from tunegrab.metadata.base import CREDENTIALS_HELP
 
 MIN_PYTHON = (3, 11)
 _VERSION_TIMEOUT_S = 10
@@ -135,11 +136,6 @@ def check_js_runtime() -> CheckResult:
         return CheckResult(label, Status.OK, f"{name}: {result.detail}")
     detail = "; ".join(too_old) if too_old else "none found on PATH (Deno, Node.js, Bun, QuickJS)"
     return CheckResult(label, Status.FAIL, detail, JS_RUNTIME_HINT)
-
-
-def check_deno() -> CheckResult:
-    """Kept for callers of the old name."""
-    return check_js_runtime()
 
 
 def check_ytdlp(today: date | None = None) -> CheckResult:
@@ -275,7 +271,8 @@ def check_spotify_credentials(settings: Settings) -> CheckResult:
         label,
         Status.WARN,
         "no (will use the public embed fallback)",
-        "Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in .env (see docs/SETUP.md).",
+        "Optional: only needed for playlists over 100 songs, full artist lists and private "
+        f"playlists ({CREDENTIALS_HELP}).",
     )
 
 
@@ -286,6 +283,6 @@ def run_all(settings: Settings) -> list[CheckResult]:
         check_js_runtime(),
         check_ytdlp(),
         check_ejs(),
-        check_output_dir(settings.output_dir),
+        check_output_dir(settings.resolved_output_dir),
         check_spotify_credentials(settings),
     ]

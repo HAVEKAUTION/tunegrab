@@ -8,7 +8,10 @@ leftover ``()`` / dangling `` - `` are tidied away.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
+import shutil
 import string
 import unicodedata
 from collections.abc import Mapping, Sequence
@@ -197,12 +200,56 @@ def _fit(segments: list[str], ext: str, budget: int) -> list[str]:
         segments[index] = shortened + suffix if index == last else shortened
 
 
-def unique_path(path: Path) -> Path:
-    """``song.mp3`` -> ``song (2).mp3`` (etc.) if the path is taken."""
-    if not path.exists():
-        return path
-    for n in range(2, 1000):
-        candidate = path.with_name(f"{path.stem} ({n}){path.suffix}")
-        if not candidate.exists():
-            return candidate
+def claim_path(path: Path) -> Path:
+    """Atomically reserve ``path`` (or ``path (2)``, ...) by creating an empty file there.
+
+    Two threads can never get the same name: the file is created with ``O_EXCL``, so
+    the second one moves on to the next free name."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    names = [path] + [path.with_name(f"{path.stem} ({n}){path.suffix}") for n in range(2, 1000)]
+    for candidate in names:
+        try:
+            os.close(os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        except FileExistsError:
+            continue
+        return candidate
     raise FileExistsError(f"Too many files named like {path}")
+
+
+def replace_file(source: Path, target: Path) -> Path:
+    """Put ``source`` in the place of the existing file ``target`` in one step, so the old
+    file is there until the new one has its name. Raises OSError and leaves ``target``
+    as it was when that isn't possible (e.g. it's open in a player on Windows)."""
+    try:
+        source.replace(target)
+    except PermissionError:
+        raise
+    except OSError:  # another drive: bring the new file next to the old one, then swap
+        staged = target.with_name(f".{target.name}.tunegrab-new")
+        try:
+            shutil.copy2(source, staged)
+            staged.replace(target)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                staged.unlink()
+            raise
+        with contextlib.suppress(OSError):
+            source.unlink()
+    return target
+
+
+def move_into_place(source: Path, target: Path) -> Path:
+    """Move ``source`` to ``target`` (or a free ``target (n)`` name) without ever
+    overwriting another file, even when several downloads finish at once. Returns the
+    final path."""
+    claimed = claim_path(target)
+    try:
+        try:
+            source.replace(claimed)  # same drive: atomic, replaces our placeholder
+        except OSError:
+            shutil.move(str(source), str(claimed))  # another drive: copy over the placeholder
+    except BaseException:
+        with contextlib.suppress(OSError):
+            claimed.unlink()
+        raise
+    return claimed

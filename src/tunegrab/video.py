@@ -27,7 +27,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -48,8 +48,13 @@ from tunegrab.download.ytdlp import (
     run_ladder,
     source_info,
 )
-from tunegrab.library.paths import sanitize_segment, unique_path
+from tunegrab.errors import TuneGrabError
+from tunegrab.library.archive import Archive
+from tunegrab.library.paths import move_into_place, sanitize_segment
 from tunegrab.models import Collection, Job, TaskStatus, Track, TrackTask
+from tunegrab.pacing import Pacer
+from tunegrab.preflight import check_folder
+from tunegrab.runner import Cancelled, EventCallback, TaskRunner
 
 log = logging.getLogger(__name__)
 
@@ -60,10 +65,8 @@ MAX_PLAYLIST_VIDEOS = 2000
 TMP_DIR_NAME = ".tunegrab-tmp"
 FFMPEG_TIMEOUT_S = 3600
 
-EventCallback = Callable[[Job, TrackTask | None], None]
 
-
-class VideoError(ValueError):
+class VideoError(TuneGrabError):
     """The link can't be used (unsupported site, private, not a video, ...)."""
 
 
@@ -347,7 +350,7 @@ class VideoDownloader:
         self,
         options: VideoOptions,
         audio_format: AudioFormat = "m4a",
-        bitrate: int = 320,
+        bitrate: int | None = None,
         cookies_from_browser: str | None = None,
         ladder: tuple[tuple[str, ...] | None, ...] = CLIENT_LADDER,
     ) -> None:
@@ -502,18 +505,29 @@ def final_path(root: Path, entry: VideoEntry, options: VideoOptions, ext: str) -
 # --- jobs --------------------------------------------------------------------------------
 
 
+def video_key(entry: VideoEntry, options: VideoOptions, fmt: str | None) -> str:
+    """Identifies one download in the history: the same link with the same options is the
+    same file (the quality only matters for video, the format only for audio)."""
+    variant = options.quality if options.mode == "video" else (fmt or "")
+    return f"{entry.url}|{options.mode}|{variant}|{options.start}|{options.end}"
+
+
 def build_job(found: VideoProbe, options: VideoOptions) -> tuple[Job, dict[str, VideoEntry]]:
     """A Job (for the Downloads list) with one task per video; returns task id -> entry."""
+    return job_for_entries(
+        found.url, found.title + options.clip_suffix(), found.uploader, found.entries, options
+    )
+
+
+def job_for_entries(
+    url: str, name: str, owner: str | None, videos: list[VideoEntry], options: VideoOptions
+) -> tuple[Job, dict[str, VideoEntry]]:
     collection = Collection(
-        kind="video",
-        id=found.url,
-        name=found.title + options.clip_suffix(),
-        owner=found.uploader,
-        source=f"video:{options.mode}",
+        kind="video", id=url, name=name, owner=owner, source=f"video:{options.mode}"
     )
     tasks: list[TrackTask] = []
     entries: dict[str, VideoEntry] = {}
-    for position, entry in enumerate(found.entries, start=1):
+    for position, entry in enumerate(videos, start=1):
         track = Track(
             title=entry.title,
             artists=[entry.uploader],
@@ -524,11 +538,11 @@ def build_job(found: VideoProbe, options: VideoOptions) -> tuple[Job, dict[str, 
         tasks.append(task)
         entries[task.id] = entry
     collection.tracks = [t.track for t in tasks]
-    return Job(input=found.url, collection=collection, tasks=tasks), entries
+    return Job(input=url, collection=collection, tasks=tasks), entries
 
 
 @dataclass
-class VideoPipeline:
+class VideoPipeline(TaskRunner):
     """Runs a video job: one video at a time (sites throttle parallel video downloads)."""
 
     settings: Settings
@@ -537,7 +551,12 @@ class VideoPipeline:
     downloader: VideoDownloader | None = None
     on_event: EventCallback | None = None
     retry_backoff: float = 2.0
+    # None: the process-wide pacer for YouTube (see tunegrab.pacing)
+    pacer: Pacer | None = None
+    # download history: skips links already saved with these options, remembers failures
+    archive: Archive | None = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
+    abort_reason: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if self.downloader is None:
@@ -555,31 +574,24 @@ class VideoPipeline:
             return self.settings.resolved_output_dir
         return self.settings.resolved_video_dir
 
-    def cancel(self) -> None:
-        self.cancel_event.set()
-
-    def _emit(self, job: Job, task: TrackTask | None = None) -> None:
-        if self.on_event is not None:
-            try:
-                self.on_event(job, task)
-            except Exception:
-                log.exception("event callback failed")
-
-    def _set(self, job: Job, task: TrackTask, status: TaskStatus, message: str = "") -> None:
-        task.status = status
-        task.message = message
-        self._emit(job, task)
-
     async def run(self, job: Job) -> Job:
+        """Raises :class:`~tunegrab.preflight.JobAborted` if the folder is unusable."""
+        check_folder(self.root, "music folder" if self.options.mode == "audio" else "video folder")
         self._emit(job)
         for task in job.tasks:
+            if self.abort_reason is not None:
+                task.error = f"Not downloaded: {self.abort_reason}"
+                self._set(job, task, TaskStatus.FAILED, task.error)
+                continue
             if self.cancel_event.is_set() or job.cancelled:
                 self._set(job, task, TaskStatus.SKIPPED, "cancelled")
                 continue
             await asyncio.to_thread(self._process, job, task)
         with contextlib.suppress(OSError):
             (self.root / TMP_DIR_NAME).rmdir()
-        job.cancelled = job.cancelled or self.cancel_event.is_set()
+        if self.abort_reason is not None:
+            job.error = self.abort_reason
+        job.cancelled = job.cancelled or (self.cancel_event.is_set() and self.abort_reason is None)
         job.finished_at = datetime.now(UTC)
         self._emit(job)
         return job
@@ -588,32 +600,29 @@ class VideoPipeline:
         assert self.downloader is not None
         entry = self.entries[task.id]
         target = final_path(self.root, entry, self.options, self.downloader.extension)
-        if target.exists():
-            task.path = str(target)
+        saved = self._saved_copy(entry)
+        if saved is not None or target.exists():
+            task.path = str(saved or target)
             self._set(job, task, TaskStatus.SKIPPED, "already downloaded")
             return
-        attempts = self.settings.retries + 1
-        for attempt in range(1, attempts + 1):
-            task.attempts = attempt
-            try:
-                self._download(job, task, entry, target)
-                return
-            except DownloadCancelled:
-                self._set(job, task, TaskStatus.SKIPPED, "cancelled")
-                return
-            except (DownloadError, OSError) as exc:
-                kind = exc.kind if isinstance(exc, DownloadError) else "other"
-                if attempt < attempts and kind != "unavailable":
-                    log.info("retrying video %s after: %s", entry.url, exc)
-                    if self.cancel_event.wait(self.retry_backoff * attempt):
-                        self._set(job, task, TaskStatus.SKIPPED, "cancelled")
-                        return
-                    continue
-                task.error = str(exc)
-                task.failed_stage = "downloading"
-                log.warning("video failed: %s: %s", entry.url, exc)
-                self._set(job, task, TaskStatus.FAILED, task.error)
-                return
+
+        def attempt() -> None:
+            self._pace(job, task)
+            self._download(job, task, entry, target)
+
+        def retryable(exc: Exception) -> bool:
+            if isinstance(exc, DownloadError):
+                return exc.kind != "unavailable"
+            return isinstance(exc, OSError)
+
+        try:
+            self._run_attempts(job, task, attempt, retryable)
+        except (Cancelled, DownloadCancelled):
+            self._set(job, task, TaskStatus.SKIPPED, "cancelled")
+        except Exception as exc:  # one broken video must not stop the rest of the job
+            if task.status in (TaskStatus.QUEUED, TaskStatus.SKIPPED):
+                task.status = TaskStatus.DOWNLOADING  # so the failure names the stage
+            self._fail_with(job, task, exc)
 
     def _download(self, job: Job, task: TrackTask, entry: VideoEntry, target: Path) -> None:
         assert self.downloader is not None
@@ -637,11 +646,49 @@ class VideoPipeline:
             if self.options.is_clip:
                 self._set(job, task, TaskStatus.CONVERTING, "cutting the clip")
                 path = cut_clip(path, self.options, self.cancel_event)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            final = unique_path(target)
-            shutil.move(str(path), final)
+            final = move_into_place(path, target)
         task.source = label
         task.low_quality = low_quality
         task.path = str(final)
         task.progress = 1.0
+        if self.archive is not None:
+            try:
+                self.archive.record_video(
+                    self._key(entry),
+                    asdict(entry),
+                    asdict(self.options),
+                    self._format,
+                    final,
+                    label,
+                )
+            except Exception:  # the file is saved; only the history entry is missing
+                log.exception("could not record video %s", entry.url)
         self._set(job, task, TaskStatus.DONE)
+
+    @property
+    def _format(self) -> str | None:
+        return self.settings.format if self.options.mode == "audio" else None
+
+    def _key(self, entry: VideoEntry) -> str:
+        return video_key(entry, self.options, self._format)
+
+    def _saved_copy(self, entry: VideoEntry) -> Path | None:
+        """Where this link was already saved with these options, if the file is still there."""
+        if self.archive is None:
+            return None
+        try:
+            record = self.archive.get_video(self._key(entry))
+        except Exception:
+            log.exception("could not read the video history")
+            return None
+        if record is None or record.status != "done" or not record.exists:
+            return None
+        return record.path
+
+    def _record_failure(self, job: Job, task: TrackTask) -> None:
+        if self.archive is None:
+            return
+        entry = self.entries[task.id]
+        self.archive.record_video_failure(
+            self._key(entry), asdict(entry), asdict(self.options), self._format, task.error or ""
+        )

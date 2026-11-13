@@ -18,6 +18,8 @@ os.environ["TUNEGRAB_DATA_DIR"] = str(_SESSION / "data")
 os.environ["TUNEGRAB_LOG_DIR"] = str(_SESSION / "logs")
 os.environ["TUNEGRAB_NO_KEYRING"] = "1"
 
+from tunegrab.config import Settings  # noqa: E402  (after the environment above)
+
 FIXTURES = Path(__file__).parent / "fixtures"
 FFMPEG = shutil.which("ffmpeg")
 _KEEP = {"TUNEGRAB_CONFIG_DIR", "TUNEGRAB_DATA_DIR", "TUNEGRAB_LOG_DIR", "TUNEGRAB_NO_KEYRING"}
@@ -33,6 +35,20 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         if key.startswith("SPOTIFY_") or (key.startswith("TUNEGRAB_") and key not in _KEEP):
             monkeypatch.delenv(key, raising=False)
     monkeypatch.chdir(tmp_path)
+    # a .env next to the code (the owner's real one, say) must not leak into tests
+    monkeypatch.setitem(Settings.model_config, "env_file", (tmp_path / ".env",))
+    home = tmp_path / "_home"  # Path.home(): the default music folder lives under it
+    monkeypatch.setenv("TUNEGRAB_CHECK_UPDATES", "false")  # no real GitHub/PyPI calls
+    # the suite was written for MP3 files; test_config covers the real default (M4A)
+    monkeypatch.setenv("TUNEGRAB_FORMAT", "mp3")
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOME", str(home))
+    # no YouTube pacing in tests (tests/test_pacing.py covers it with a fake clock)
+    from tunegrab import pacing
+
+    monkeypatch.setattr(pacing, "_shared", pacing.Pacer(0))
+    monkeypatch.setattr(pacing, "GUEST_PER_HOUR", 0)
+    monkeypatch.setattr(pacing, "SIGNED_IN_PER_HOUR", 0)
     return tmp_path
 
 
