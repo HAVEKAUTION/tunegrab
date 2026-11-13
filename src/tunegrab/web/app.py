@@ -113,6 +113,39 @@ def check_music_folder(folder: Path) -> None:
         raise ValueError(f"TuneGrab can't save music there: {result.detail}")
 
 
+# Settings as the page names them, for error messages ("Songs at once can be at most 16")
+SETTING_LABELS = {
+    "output_dir": "Music folder",
+    "format": "Format",
+    "bitrate": "MP3 quality",
+    "threads": "Songs at once",
+    "playlist_mode": "Playlists",
+    "track_template": "Albums and songs",
+    "playlist_template": "Playlist folders",
+    "video_quality": "Video quality",
+    "cookies_from_browser": "Use sign-in from",
+}
+
+
+class SettingError(ValueError):
+    """A rejected setting, remembering which one."""
+
+    def __init__(self, field: str, message: str) -> None:
+        super().__init__(message)
+        self.field = field
+
+
+def setting_error(exc: Exception) -> dict[str, Any]:
+    """A settings error in the page's words, with the field it belongs to (if known)."""
+    message = str(exc.args[0]) if isinstance(exc, KeyError) and exc.args else str(exc)
+    field = exc.field if isinstance(exc, SettingError) else None
+    if field and message.startswith(field):
+        message = SETTING_LABELS[field] + message[len(field) :]
+    message = message.replace(" must be >= ", " must be at least ")
+    message = message.replace(" must be <= ", " can be at most ")
+    return {"message": message, "field": field}
+
+
 def apply_settings(current: Settings, changes: dict[str, Any]) -> Settings:
     """Validate ``changes``, save them to the config file and return updated settings."""
     unknown = sorted(set(changes) - set(UI_SETTINGS))
@@ -120,17 +153,20 @@ def apply_settings(current: Settings, changes: dict[str, Any]) -> Settings:
         raise ValueError(f"Can't change {', '.join(unknown)} here")
     typed: dict[str, Any] = {}
     for key, raw in changes.items():
-        value = coerce_setting(key, "" if raw is None else str(raw).strip())
-        if key.endswith("_template") and value:
-            validate_template(str(value))
-        if key == "output_dir" and value:
-            check_music_folder(Path(str(value)))
-        if key == "cookies_from_browser" and value:
-            value = str(value).lower()
-            if value not in COOKIE_BROWSERS:
-                raise ValueError(
-                    f"cookies_from_browser must be one of {', '.join(COOKIE_BROWSERS)}"
-                )
+        try:
+            value = coerce_setting(key, "" if raw is None else str(raw).strip())
+            if key.endswith("_template") and value:
+                validate_template(str(value))
+            if key == "output_dir" and value:
+                check_music_folder(Path(str(value)))
+            if key == "cookies_from_browser" and value:
+                value = str(value).lower()
+                if value not in COOKIE_BROWSERS:
+                    raise ValueError(
+                        f"cookies_from_browser must be one of {', '.join(COOKIE_BROWSERS)}"
+                    )
+        except (ValueError, TemplateError) as exc:
+            raise SettingError(key, str(exc)) from exc
         typed[key] = value
     stored = read_config_file()
     update: dict[str, Any] = {}
@@ -525,7 +561,7 @@ def create_app(
     def _job(job_id: str) -> Job:
         job = manager.jobs.get(job_id)
         if job is None:
-            raise HTTPException(404, "No such job")
+            raise HTTPException(404, "That download isn't in the list any more. Reload the page.")
         return job
 
     @app.get("/api/jobs/{job_id}")
@@ -759,7 +795,7 @@ def create_app(
         try:
             services.settings = apply_settings(services.settings, changes)
         except (KeyError, ValueError, TemplateError) as exc:
-            raise HTTPException(400, str(exc)) from exc
+            raise HTTPException(400, setting_error(exc)) from exc
         return settings_payload(services.settings)
 
     picker_open = threading.Lock()  # Tk allows one dialog at a time; a second one crashes

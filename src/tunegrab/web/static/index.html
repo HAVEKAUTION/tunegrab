@@ -37,23 +37,24 @@
 
 <div class="app">
   <aside class="sidebar" aria-label="Main">
-    <div class="brand"><span class="mark"><svg class="i"><use href="#i-logo"/></svg></span>TuneGrab</div>
+    <div class="brand"><span class="mark"><svg class="i" aria-hidden="true"><use href="#i-logo"/></svg></span>TuneGrab</div>
     <nav class="stack snug">
-      <button class="nav-item" data-tab="get"><svg class="i lg"><use href="#i-search"/></svg>Get music<kbd>1</kbd></button>
-      <button class="nav-item" data-tab="jobs"><svg class="i lg"><use href="#i-jobs"/></svg>Downloads<span id="active-count" class="count hidden" aria-label="active downloads">0</span><kbd>2</kbd></button>
-      <button class="nav-item" data-tab="library"><svg class="i lg"><use href="#i-library"/></svg>Library<kbd>3</kbd></button>
-      <button class="nav-item" data-tab="settings"><svg class="i lg"><use href="#i-sliders"/></svg>Settings<kbd>4</kbd></button>
+      <button class="nav-item" data-tab="get"><svg class="i lg" aria-hidden="true"><use href="#i-search"/></svg>Get music<kbd>1</kbd></button>
+      <button class="nav-item" data-tab="jobs"><svg class="i lg" aria-hidden="true"><use href="#i-jobs"/></svg>Downloads<span id="active-count" class="count hidden" aria-label="active downloads">0</span><kbd>2</kbd></button>
+      <button class="nav-item" data-tab="library"><svg class="i lg" aria-hidden="true"><use href="#i-library"/></svg>Library<kbd>3</kbd></button>
+      <button class="nav-item" data-tab="settings"><svg class="i lg" aria-hidden="true"><use href="#i-sliders"/></svg>Settings<kbd>4</kbd></button>
     </nav>
     <div class="sidebar-foot">
       <div class="conn" id="conn" role="status"><span class="dot"></span><span>Connecting…</span></div>
       <div class="conn" id="sys-status"><span class="dot"></span><span>Checking tools…</span></div>
-      <button class="linkish" id="shortcuts-btn"><svg class="i"><use href="#i-keyboard"/></svg> Shortcuts <kbd>?</kbd></button>
+      <button class="linkish" id="shortcuts-btn"><svg class="i" aria-hidden="true"><use href="#i-keyboard"/></svg> Shortcuts <kbd>?</kbd></button>
       <span class="xs faint" id="version"></span>
     </div>
   </aside>
 
   <main id="main">
     <div class="page">
+      <div id="offline-banner" role="alert"></div>
       <div id="system-banner"></div>
 
       <!-- ============================================================ GET MUSIC -->
@@ -62,14 +63,14 @@
           <p class="muted">Find an artist, album or playlist, tick what you want, then download the queue. Paste a YouTube (or other video) link to save the video, a clip of it, or its audio.</p></div></div>
         <form id="finder" class="finder" autocomplete="off" role="search">
           <label class="search"><span class="sr">Spotify or YouTube link, or an artist, album or song</span>
-            <svg class="i lg"><use href="#i-search"/></svg>
+            <svg class="i lg" aria-hidden="true"><use href="#i-search"/></svg>
             <input id="url" class="input" type="text" placeholder="Spotify or YouTube link, or an artist, album or song" required></label>
           <label><span class="sr">Audio format</span>
             <select id="format" class="select" title="Audio format for these downloads. M4A and Opus keep YouTube's original audio; MP3 and FLAC re-encode it, which never adds quality.">
               <option value="" id="format-default">Default format</option><option value="m4a">M4A · original quality</option>
               <option value="opus">Opus · original quality</option><option value="mp3">MP3 · re-encoded</option><option value="flac">FLAC · re-encoded</option></select></label>
-          <button class="btn primary" type="submit" id="browse-btn"><svg class="i"><use href="#i-search"/></svg>Browse</button>
-          <button class="btn" type="button" id="now-btn" title="Download the whole link straight away, or the top song for what you typed"><svg class="i"><use href="#i-download"/></svg>Download now</button>
+          <button class="btn primary" type="submit" id="browse-btn"><svg class="i" aria-hidden="true"><use href="#i-search"/></svg>Browse</button>
+          <button class="btn" type="button" id="now-btn" title="Download the whole link straight away, or the top song for what you typed"><svg class="i" aria-hidden="true"><use href="#i-download"/></svg>Download now</button>
         </form>
         <div id="finder-error" class="small error-text mt-2" role="alert"></div>
         <p class="small faint mt-2">Have a playlist or Liked Songs export?
@@ -81,8 +82,8 @@
       <!-- ============================================================ DOWNLOADS -->
       <section id="tab-jobs" class="hidden" aria-labelledby="jobs-title">
         <div class="page-head"><div><h1 id="jobs-title">Downloads</h1><p class="muted" id="jobs-sub">Progress for everything you've queued.</p></div>
-          <div class="row"><button class="btn" id="retry-failures" hidden><svg class="i"><use href="#i-refresh"/></svg><span></span></button>
-            <button class="btn ghost" id="clear-finished"><svg class="i"><use href="#i-x"/></svg>Clear finished</button></div></div>
+          <div class="row"><button class="btn" id="retry-failures" hidden><svg class="i" aria-hidden="true"><use href="#i-refresh"/></svg><span></span></button>
+            <button class="btn ghost" id="clear-finished"><svg class="i" aria-hidden="true"><use href="#i-x"/></svg>Clear finished</button></div></div>
         <div id="jobs"></div>
         <div id="history"></div>
       </section>
@@ -90,9 +91,9 @@
       <!-- ============================================================ LIBRARY -->
       <section id="tab-library" class="hidden" aria-labelledby="lib-title">
         <div class="page-head"><div><h1 id="lib-title">Library</h1><p class="muted" id="lib-meta">Everything TuneGrab has saved.</p></div>
-          <div class="row"><button class="btn" id="lib-refresh"><svg class="i"><use href="#i-refresh"/></svg>Refresh</button>
-            <button class="btn" id="lib-open"><svg class="i"><use href="#i-folder"/></svg>Open folder</button></div></div>
-        <label class="search narrow"><span class="sr">Filter library</span><svg class="i lg"><use href="#i-search"/></svg>
+          <div class="row"><button class="btn" id="lib-refresh"><svg class="i" aria-hidden="true"><use href="#i-refresh"/></svg>Refresh</button>
+            <button class="btn" id="lib-open"><svg class="i" aria-hidden="true"><use href="#i-folder"/></svg>Open folder</button></div></div>
+        <label class="search narrow"><span class="sr">Filter library</span><svg class="i lg" aria-hidden="true"><use href="#i-search"/></svg>
           <input id="lib-filter" class="input" type="search" placeholder="Filter by title, artist or album"></label>
         <input type="file" id="sync-file" accept=".csv,text/csv" hidden>
         <div id="playlists"></div>
@@ -106,8 +107,8 @@
         <form id="settings-form" class="settings" autocomplete="off" novalidate>
           <div class="card"><h3>Music folder</h3><p class="muted small">Where downloaded files are saved.</p>
             <div class="row nowrap"><input id="s-output_dir" class="input" type="text" aria-label="Music folder">
-              <button type="button" id="s-browse" class="btn"><svg class="i"><use href="#i-folder"/></svg>Choose…</button>
-              <button type="button" id="s-open" class="btn ghost" title="Open in File Explorer"><svg class="i"><use href="#i-external"/></svg>Open</button></div></div>
+              <button type="button" id="s-browse" class="btn"><svg class="i" aria-hidden="true"><use href="#i-folder"/></svg>Choose…</button>
+              <button type="button" id="s-open" class="btn ghost" title="Open in File Explorer"><svg class="i" aria-hidden="true"><use href="#i-external"/></svg>Open</button></div></div>
           <div class="card"><h3>Audio</h3><p class="muted small">YouTube audio is lossy. M4A and Opus keep the original stream; MP3 and FLAC re-encode it without adding quality.</p>
             <div class="form-grid">
               <label class="field"><span class="label">Format</span><select id="s-format" class="select">
@@ -131,7 +132,7 @@
                 <option value="brave">Brave</option><option value="safari">Safari</option><option value="opera">Opera</option><option value="vivaldi">Vivaldi</option></select>
                 <span class="help">Firefox works best. On Windows, Chrome, Edge and other Chromium browsers usually have to be closed first, and new versions may not be readable at all.</span></label>
             </div>
-            <div class="banner in-card" id="cookies-warn"><svg class="i lg"><use href="#i-alert"/></svg><div class="grow small">
+            <div class="banner in-card" id="cookies-warn"><svg class="i lg" aria-hidden="true"><use href="#i-alert"/></svg><div class="grow small">
               YouTube can restrict or ban the Google account used for downloading. Use an account you can afford to lose, not your main one.</div></div></div>
           <div class="card"><h3>Downloads</h3><p class="muted small">How TuneGrab works through your queue.</p>
             <div class="form-grid">
@@ -152,15 +153,15 @@
             <p class="help mt-2">Once a day TuneGrab asks GitHub and PyPI for their newest version numbers. Nothing about you or your music is sent.</p></div>
           <div class="savebar"><span id="settings-msg" class="small muted" role="status">No unsaved changes.</span>
             <div class="row"><button type="button" class="btn ghost" id="s-reset">Reset to defaults</button>
-              <button type="submit" class="btn primary" id="s-save"><svg class="i"><use href="#i-check"/></svg>Save</button></div></div>
+              <button type="submit" class="btn primary" id="s-save"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg>Save</button></div></div>
         </form>
         <div class="card mt-4"><div class="row between"><h3>System</h3>
-          <div class="row"><button class="btn sm ghost" id="sys-update" data-update-ytdlp title="Get the newest yt-dlp. YouTube changes often, and an old yt-dlp is the most common reason downloads fail."><svg class="i"><use href="#i-download"/></svg>Update yt-dlp</button>
-          <button class="btn sm" id="sys-recheck"><svg class="i"><use href="#i-refresh"/></svg>Check again</button></div></div>
+          <div class="row"><button class="btn sm ghost" id="sys-update" data-update-ytdlp title="Get the newest yt-dlp. YouTube changes often, and an old yt-dlp is the most common reason downloads fail."><svg class="i" aria-hidden="true"><use href="#i-download"/></svg>Update yt-dlp</button>
+          <button class="btn sm" id="sys-recheck"><svg class="i" aria-hidden="true"><use href="#i-refresh"/></svg>Check again</button></div></div>
           <p class="muted small lead">Tools TuneGrab needs to download and convert audio.</p>
           <table class="checks"><tbody id="sys-table"></tbody></table></div>
         <div class="card"><div class="row between"><h3>Storage</h3>
-          <button class="btn sm" id="st-clean"><svg class="i"><use href="#i-x"/></svg>Free up space</button></div>
+          <button class="btn sm" id="st-clean"><svg class="i" aria-hidden="true"><use href="#i-x"/></svg>Free up space</button></div>
           <p class="muted small lead">What TuneGrab keeps besides your music. Freeing space never touches your music, settings or download history.</p>
           <table class="checks" aria-label="Storage"><tbody id="st-table"><tr><td class="muted small">Measuring…</td></tr></tbody></table></div>
         <div class="card"><h3>About</h3>
@@ -176,7 +177,7 @@
 <dialog id="sheet" class="sheet" aria-labelledby="sheet-title"></dialog>
 <dialog id="queue-dialog" class="modal" aria-labelledby="queue-title"></dialog>
 <dialog id="keys-dialog" class="modal" aria-labelledby="keys-title">
-  <div class="d-head"><h3 id="keys-title">Keyboard shortcuts</h3><button class="btn ghost icon" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+  <div class="d-head"><h3 id="keys-title">Keyboard shortcuts</h3><button class="btn ghost icon" data-close aria-label="Close"><svg class="i" aria-hidden="true"><use href="#i-x"/></svg></button></div>
   <div class="d-body"><table><tbody>
     <tr><td><kbd>/</kbd></td><td>Search for music</td></tr>
     <tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd></td><td>Get music · Downloads · Library · Settings</td></tr>
@@ -189,17 +190,17 @@
 <dialog id="removed-dialog" class="modal wide" aria-labelledby="removed-title"></dialog>
 <dialog id="fix-dialog" class="modal" aria-labelledby="fix-title">
   <form id="fix-form" novalidate>
-    <div class="d-head"><h3 id="fix-title">Use a YouTube link</h3><button type="button" class="btn ghost icon" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="d-head"><h3 id="fix-title">Use a YouTube link</h3><button type="button" class="btn ghost icon" data-close aria-label="Close"><svg class="i" aria-hidden="true"><use href="#i-x"/></svg></button></div>
     <div class="d-body form">
       <p class="small"><span class="muted">Song:</span> <strong id="fix-song"></strong></p>
       <label class="field"><span class="label">YouTube or YouTube Music link</span>
         <input id="fix-url" class="input" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://music.youtube.com/watch?v=…">
         <span class="help">TuneGrab remembers this link for the song and downloads it straight away.</span></label>
-      <p class="small"><a id="fix-search" href="#" target="_blank" rel="noopener">Search YouTube Music for this song <svg class="i"><use href="#i-external"/></svg></a></p>
+      <p class="small"><a id="fix-search" href="#" target="_blank" rel="noopener">Search YouTube Music for this song <svg class="i" aria-hidden="true"><use href="#i-external"/></svg></a></p>
       <p id="fix-error" class="small error-text" role="alert"></p>
     </div>
     <div class="d-foot"><button type="button" class="btn ghost" data-close>Cancel</button>
-      <button type="submit" id="fix-submit" class="btn primary"><svg class="i"><use href="#i-download"/></svg>Download this one</button></div>
+      <button type="submit" id="fix-submit" class="btn primary"><svg class="i" aria-hidden="true"><use href="#i-download"/></svg>Download this one</button></div>
   </form>
 </dialog>
 

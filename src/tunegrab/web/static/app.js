@@ -16,8 +16,9 @@ async function api(path, options = {}) {
   catch { throw new ApiError("TuneGrab isn't responding. Is the TuneGrab window still open?"); }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const detail = Array.isArray(body.detail) ? body.detail.map((d) => d.msg).join("; ") : body.detail;
-    throw new ApiError(detail || `Request failed (${res.status})`, body);
+    const d = body.detail;
+    const detail = Array.isArray(d) ? d.map((x) => x.msg).join("; ") : d && typeof d === "object" ? d.message : d;
+    throw new ApiError(detail || `TuneGrab couldn't do that (error ${res.status}). Try again; if it keeps failing, the log file (Settings, About) says why.`, body);
   }
   return body;
 }
@@ -270,9 +271,17 @@ function renderFirstRun() {
     <h3>Start with an artist</h3>
     <p>Type an artist to see their albums and singles, or an album or song to find it. Spotify links work too.</p>
     <div class="examples">${["Daft Punk", "Fleetwood Mac", "Tame Impala"].map((n) => `<button class="chip" data-example="${esc(n)}">${esc(n)}</button>`).join("")}</div>
-    ${s ? `<p class="small faint mt-3">Music is saved to <span class="mono">${esc(s.paths.library)}</span>
-      ${s.default_folder ? ` · <button class="linkish link" data-goto="settings">Choose another folder</button>` : ""}</p>` : ""}
+    ${s && !localStorage.getItem("tg-welcomed") ? firstRunNote(s) : ""}
   </div>`;
+}
+function firstRunNote(s) {
+  const missing = s.checks.filter((c) => c.status === "fail").length;
+  return `<div class="intro mt-4"><p class="small">TuneGrab finds each song on YouTube Music, saves the audio and tags it with the
+      title, artist, album and cover. Spotify is only used to read what's on an album or playlist.</p>
+    <p class="small mt-2">Music is saved to <span class="mono">${esc(s.paths.library)}</span> · <button class="linkish link" data-goto="settings">Change</button></p>
+    <p class="small mt-2">${missing ? `<span class="error-text">${icon("alert")} ${plural(missing, "tool")} missing: see the message at the top.</span>`
+      : `<span class="ok-text">${icon("check")} Everything TuneGrab needs is installed.</span>`}</p>
+    <button class="btn sm mt-3" data-welcomed>${icon("check")}Got it</button></div>`;
 }
 
 async function openArtist(btn) {
@@ -976,7 +985,7 @@ async function loadLibrary() {
   try { state.library = await api("/api/library"); renderLibrary(); }
   catch (err) { $("#library").innerHTML = `<div class="card empty section">${icon("alert")}<h3>Couldn't load your library</h3><p>${esc(err.message)}</p></div>`; }
 }
-$("#lib-refresh").addEventListener("click", async (e) => { e.currentTarget.disabled = true; await loadLibrary(); e.currentTarget.disabled = false; });
+$("#lib-refresh").addEventListener("click", async (e) => { const b = e.currentTarget; b.disabled = true; await loadLibrary(); b.disabled = false; });
 let filterTimer = 0;
 $("#lib-filter").addEventListener("input", () => { clearTimeout(filterTimer); filterTimer = setTimeout(renderLibrary, 120); });
 
@@ -1164,6 +1173,15 @@ $("#tab-library").addEventListener("click", (e) => {
   if (b.dataset.show) openPath(b.dataset.show);
   if (b.hasAttribute("data-goto-get")) { showTab("get"); $("#url").focus(); }
 });
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("[data-welcomed]")) return;
+  localStorage.setItem("tg-welcomed", "1"); renderFirstRun(); $("#url").focus();
+});
+// Last line of defence: a failure no handler caught still reaches the user, never only the console.
+window.addEventListener("unhandledrejection", (e) => {
+  console.error(e.reason);
+  toast(`Something went wrong: ${e.reason?.message || e.reason}. Try again; the log file (Settings, About) has details.`, { kind: "bad", timeout: 10000 });
+});
 $("#lib-open").addEventListener("click", () => openPath(null));
 
 // ============================================================== settings
@@ -1210,8 +1228,8 @@ $("#settings-form").addEventListener("submit", async (e) => {
     toast("Settings saved."); state.library = null; loadSystem(true);
   } catch (err) {
     setSettingsMsg(err.message, "bad");
-    const key = SETTING_KEYS.find((k) => err.message.includes(k) || (k.endsWith("template") && /template/i.test(err.message)));
-    if (key) $(`#s-${key}`).setAttribute("aria-invalid", "true");
+    const key = err.body?.detail?.field;
+    if (key && $(`#s-${key}`)) { $(`#s-${key}`).setAttribute("aria-invalid", "true"); $(`#s-${key}`).focus(); }
   } finally { btn.disabled = false; }
 });
 $("#s-reset").addEventListener("click", async () => {
@@ -1244,7 +1262,14 @@ function scheduleRender() {
   renderPending = true;
   requestAnimationFrame(() => { renderPending = false; renderJobs(); renderHistory(); });
 }
-function setConn(kind, text) { $("#conn").innerHTML = `<span class="dot ${kind}"></span><span>${text}</span>`; }
+function setConn(kind, text) {
+  $("#conn").innerHTML = `<span class="dot ${kind}"></span><span>${text}</span>`;
+  const offline = kind !== "ok";
+  if (offline === !!$("#offline-banner").firstChild) return;
+  $("#offline-banner").innerHTML = offline ? `<div class="banner bad">${icon("alert", "lg")}<div class="grow"><b>Lost contact with TuneGrab.</b>
+    <span class="muted small">Downloads already running carry on if TuneGrab is still open. This page reconnects by itself; if it doesn't, start TuneGrab again.</span></div></div>` : "";
+  if (offline) $("#sys-status").innerHTML = `<span class="dot"></span><span>Tools: waiting for TuneGrab</span>`;
+}
 // After a dropped connection (or when the server had to drop events for us) the page may
 // have missed updates: reload jobs, their songs, history and system state from scratch.
 let resyncing = false;

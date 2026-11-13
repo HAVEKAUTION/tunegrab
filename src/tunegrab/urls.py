@@ -107,7 +107,10 @@ def _ref(kind: str, item_id: str, original: str) -> SpotifyRef:
     if kind not in _KINDS:
         raise InvalidURLError(f"Unsupported Spotify link type {kind!r}: {original}")
     if not _SPOTIFY_ID.match(item_id):
-        raise InvalidURLError(f"Invalid Spotify ID {item_id!r} in {original}")
+        raise InvalidURLError(
+            f"That Spotify link looks cut off ({original}). "
+            "Copy it again in Spotify: Share, then Copy link."
+        )
     return SpotifyRef(kind, item_id)  # type: ignore[arg-type]
 
 

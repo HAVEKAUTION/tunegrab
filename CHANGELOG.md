@@ -37,6 +37,14 @@ All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
   version. Songs downloaded before this version show their format only.
 
 ### Fixed
+- **Lost connection is shown.** If the page can't reach TuneGrab, a banner says so and the
+  sidebar stops claiming the tools are ready; it clears itself on reconnect.
+- **First run** explains what TuneGrab does, where music goes (with Change) and whether the
+  tools are installed; "Got it" hides it for good.
+- Settings errors use the page's words ("Songs at once can be at most 16") and focus the
+  field; a cut-off Spotify link says how to copy it again; unknown server errors point to
+  the log file instead of "Request failed (500)".
+- Library → Refresh stayed disabled after one click.
 - A link that couldn't be read ended with a green "0 downloaded" message. It now says it
   couldn't start, and why.
 - The song panel's "Done" button sits at the bottom of the panel instead of under the list.

@@ -400,8 +400,17 @@ def test_settings_rejects_unusable_music_folders(
     blocker.write_text("x")
     for folder, reason in ((blocker, "can't save music there"), ("relative/music", "full folder")):
         response = client.post("/api/settings", json={"output_dir": str(folder)})
-        assert response.status_code == 400 and reason in response.json()["detail"]
+        detail = response.json()["detail"]
+        assert response.status_code == 400 and reason in detail["message"]
+        assert detail["field"] == "output_dir"
     assert services.settings.output_dir == before
+
+
+def test_settings_errors_use_the_page_words(client: TestClient) -> None:
+    detail = client.post("/api/settings", json={"threads": "99"}).json()["detail"]
+    assert detail == {"message": "Songs at once can be at most 16", "field": "threads"}
+    detail = client.post("/api/settings", json={"track_template": "{nope}.{ext}"}).json()["detail"]
+    assert detail["field"] == "track_template"
     assert "output_dir" not in read_config_file()
 
 
