@@ -87,6 +87,7 @@ $("#st-clean").addEventListener("click", async () => {
 });
 
 // ============================================================== system status
+const SOURCE_URL = "https://github.com/HAVEKAUTION/tunegrab";
 const state = { jobs: new Map(), tasks: new Map(), history: [], library: null, system: null };
 async function loadSystem(force = false) {
   try {
@@ -95,7 +96,7 @@ async function loadSystem(force = false) {
   renderSystem();
 }
 function renderSystemError(message) {
-  $("#sys-status").innerHTML = `<span class="dot bad"></span><span>Tools: unknown</span>`;
+  $("#sys-status").innerHTML = `<span class="dot bad"></span><span>Couldn't check tools</span>`;
   $("#system-banner").innerHTML = `<div class="banner bad" role="alert">${icon("alert", "lg")}<div class="grow"><b>Can't check your setup.</b> <span class="muted">${esc(message)}</span></div></div>`;
 }
 function renderSystem() {
@@ -109,8 +110,8 @@ function renderSystem() {
     : `<span class="dot ok"></span><span>Tools ready</span>`;
   $("#system-banner").innerHTML = failing.length ? `<div class="banner bad" role="alert">${icon("alert", "lg")}<div class="grow">
       <b>Downloads won't work until this is fixed:</b>
-      ${failing.map((c) => `<div class="small" style="margin-top:var(--s-1)">${esc(c.name)}: ${esc(c.detail)}${c.hint ? ` — <span class="mono">${esc(c.hint)}</span>` : ""}</div>`).join("")}
-      <div class="small muted" style="margin-top:var(--s-1)">Then restart TuneGrab.</div></div>
+      ${failing.map((c) => `<div class="small mt-1">${esc(c.name)}: ${esc(c.detail)}${c.hint ? ` — <span class="mono">${esc(c.hint)}</span>` : ""}</div>`).join("")}
+      <div class="small muted mt-1">Then restart TuneGrab.</div></div>
       <button class="btn sm" data-recheck>${icon("refresh")}Check again</button></div>` : "";
   $("#system-banner").innerHTML += (s.warnings || []).map((w) => `<div class="banner warn" role="status">${icon("info", "lg")}<div class="grow small">${esc(w)}</div>
       <button class="btn sm ghost" data-dismiss-warnings>${icon("x")}Dismiss</button></div>`).join("");
@@ -124,7 +125,9 @@ function renderSystem() {
   const p = s.paths;
   $("#about").innerHTML = [["Version", s.version, null], ["Music folder", p.library, p.library], ["Log file", p.log, p.log],
     ["Settings file", p.config, p.config], ["Download history", p.archive, p.archive]]
-    .map(([k, v, copy]) => `<dt>${k}</dt><dd class="${copy ? "mono" : ""}">${esc(v)}</dd><dd>${copy ? `<button class="btn ghost icon sm" data-copy="${esc(copy)}" aria-label="Copy ${k.toLowerCase()} path" title="Copy path">${icon("copy")}</button>` : ""}</dd>`).join("");
+    .map(([k, v, copy]) => `<dt>${k}</dt><dd class="${copy ? "mono" : ""}">${esc(v)}</dd><dd>${copy ? `<button class="btn ghost icon sm" data-copy="${esc(copy)}" aria-label="Copy ${k.toLowerCase()} path" title="Copy path">${icon("copy")}</button>` : ""}</dd>`).join("")
+    + `<dt>Licence</dt><dd>GPL-3.0-or-later. Free software, shared as it is, with no warranty.</dd><dd></dd>
+       <dt>Source</dt><dd><a href="${SOURCE_URL}" target="_blank" rel="noopener">${SOURCE_URL.replace("https://", "")} ${icon("external")}</a></dd><dd></dd>`;
   renderFirstRun();
 }
 // newer TuneGrab / yt-dlp (checked by the server once a day); each version can be dismissed
@@ -257,10 +260,10 @@ $("#csv-file").addEventListener("change", async (e) => {
 });
 
 function skeletonGrid() {
-  return `<div class="row" style="gap:var(--s-4);margin-bottom:var(--s-6)"><div class="skeleton" style="width:64px;height:64px;border-radius:50%"></div>
-    <div class="stack" style="gap:var(--s-2)"><div class="skeleton" style="width:220px;height:22px"></div><div class="skeleton" style="width:140px;height:14px"></div></div></div>
-    <div class="grid" aria-busy="true" aria-label="Loading">${Array.from({ length: 10 }, () => `<div><div class="skeleton" style="aspect-ratio:1"></div>
-    <div class="skeleton" style="height:12px;margin-top:var(--s-2);width:80%"></div></div>`).join("")}</div>`;
+  return `<div class="row loading-head"><div class="skeleton avatar"></div>
+    <div class="stack tight"><div class="skeleton line-lg"></div><div class="skeleton line"></div></div></div>
+    <div class="grid" aria-busy="true" aria-label="Loading">${Array.from({ length: 10 }, () => `<div><div class="skeleton sq"></div>
+    <div class="skeleton caption"></div></div>`).join("")}</div>`;
 }
 
 function renderFirstRun() {
@@ -270,8 +273,8 @@ function renderFirstRun() {
     <h3>Start with an artist</h3>
     <p>Type an artist to see their albums and singles, or an album or song to find it. Spotify links work too.</p>
     <div class="examples">${["Daft Punk", "Fleetwood Mac", "Tame Impala"].map((n) => `<button class="chip" data-example="${esc(n)}">${esc(n)}</button>`).join("")}</div>
-    ${s ? `<p class="small faint" style="margin-top:var(--s-3)">Music is saved to <span class="mono">${esc(s.paths.library)}</span>
-      ${s.default_folder ? ` · <button class="linkish" style="font-size:var(--fs-sm);color:var(--info)" data-goto="settings">Choose another folder</button>` : ""}</p>` : ""}
+    ${s ? `<p class="small faint mt-3">Music is saved to <span class="mono">${esc(s.paths.library)}</span>
+      ${s.default_folder ? ` · <button class="linkish link" data-goto="settings">Choose another folder</button>` : ""}</p>` : ""}
   </div>`;
 }
 
@@ -320,11 +323,11 @@ function videoHtml(v) {
   const meta = single
     ? [v.uploader, v.duration_s ? fmtTime(v.duration_s) : null, top ? `up to ${top}p` : null, v.site].filter(Boolean).join(" · ")
     : [v.uploader, plural(v.count, "video"), v.site].filter(Boolean).join(" · ");
-  const list = !single && v.entries.length ? `<div class="card" style="margin-top:var(--s-4)"><table><tbody>${v.entries.map((e, i) => `<tr><td class="c-num tnum">${i + 1}</td>
+  const list = !single && v.entries.length ? `<div class="card mt-4"><table><tbody>${v.entries.map((e, i) => `<tr><td class="c-num tnum">${i + 1}</td>
       <td><div class="t-title">${esc(e.title)}</div><div class="t-sub">${esc(e.uploader)}</div></td><td class="c-time tnum">${e.duration_s ? fmtTime(e.duration_s) : ""}</td></tr>`).join("")}</tbody></table>
-      ${v.count > v.entries.length ? `<p class="small faint" style="margin:var(--s-2) 0 0">and ${v.count - v.entries.length} more</p>` : ""}</div>` : "";
+      ${v.count > v.entries.length ? `<p class="small faint mt-2">and ${v.count - v.entries.length} more</p>` : ""}</div>` : "";
   return `<div class="video-head">${v.thumbnail ? `<img class="thumb" src="${esc(v.thumbnail)}" alt="">` : `<span class="thumb"></span>`}
-      <div><div class="xs faint" style="text-transform:uppercase;letter-spacing:.06em">${single ? "Video" : "Playlist"}</div><h2>${esc(v.title)}</h2>
+      <div><div class="xs faint eyebrow">${single ? "Video" : "Playlist"}</div><h2>${esc(v.title)}</h2>
       <div class="small muted">${esc(meta)}</div></div></div>
     <form class="card" id="video-form" novalidate>
       <div class="video-form">
@@ -337,7 +340,7 @@ function videoHtml(v) {
         <label class="field"><span class="label">to</span><input id="v-end" class="input time tnum" type="text" inputmode="decimal" placeholder="${v.duration_s ? fmtTime(v.duration_s) : "end"}" aria-describedby="v-help"></label>` : ""}
         <button class="btn primary" type="submit" id="v-go">${icon("download")}Download</button>
       </div>
-      <p class="small faint" id="v-help" style="margin:var(--s-3) 0 0">${single ? "Leave the clip times empty for the whole video. " : ""}${videoForm.mode === "audio" ? `Audio goes to your music folder in the format chosen above.` : `Saved to <span class="mono">${esc(v.folder)}</span>. MP4 with H.264 where YouTube offers it, so it plays everywhere.`}</p>
+      <p class="small faint mt-3" id="v-help">${single ? "Leave the clip times empty for the whole video. " : ""}${videoForm.mode === "audio" ? `Audio goes to your music folder in the format chosen above.` : `Saved to <span class="mono">${esc(v.folder)}</span>. MP4 with H.264 where YouTube offers it, so it plays everywhere.`}</p>
       <div class="small error-text" id="v-error" role="alert"></div>
     </form>${list}`;
 }
@@ -373,9 +376,9 @@ function artistHtml(d) {
   const chip = (k, label, n) => n || k === "all" ? `<button class="chip" aria-pressed="${view.filter === k}" data-filter="${k}">${label}${k === "all" ? "" : ` <span class="faint">${n}</span>`}</button>` : "";
   const source = d.source === "ytmusic" ? "YouTube Music · complete" : d.source === "spotify-api" ? "Spotify · complete" : "Spotify · newest releases";
   return `<div class="artist-head">${d.image_url ? `<img src="${esc(d.image_url)}" alt="">` : `<span class="ph"></span>`}
-      <div class="grow"><h2>${esc(d.name)}</h2><div class="small muted">${plural(d.releases.length, "release")} <span class="pill" style="margin-left:var(--s-2)">${source}</span></div></div>
+      <div class="grow"><h2>${esc(d.name)}</h2><div class="small muted">${plural(d.releases.length, "release")} <span class="pill ml-2">${source}</span></div></div>
       ${!d.complete ? `<button class="btn" data-full>${icon("refresh")}Full discography</button>` : ""}</div>
-    ${!d.complete ? `<div class="banner" style="margin:0 0 var(--s-4)">${icon("info", "lg")}<div class="grow small">Spotify's public page only lists the newest 8 albums and 8 singles. <b>Full discography</b> loads every release from YouTube Music.</div></div>` : ""}
+    ${!d.complete ? `<div class="banner">${icon("info", "lg")}<div class="grow small">Spotify's public page only lists the newest 8 albums and 8 singles. <b>Full discography</b> loads every release from YouTube Music.</div></div>` : ""}
     <div class="toolbar"><div class="chips" role="group" aria-label="Filter releases">${chip("all", "All", d.releases.length)}${chip("album", "Albums", counts.album)}${chip("single", "Singles & EPs", counts.single)}${chip("compilation", "Compilations", counts.compilation)}</div>
       <div class="row"><button class="btn sm" data-tick-all>${icon("check")}Select all shown</button><button class="btn sm ghost" data-untick-all>Clear selection</button></div></div>
     ${shown.length ? `<div class="grid">${shown.map(releaseHtml).join("")}</div>` : `<div class="card empty"><p>No releases in this group.</p></div>`}
@@ -389,7 +392,7 @@ function searchHtml(d) {
   const picked = new Set(q ? q.trackIds : []);
   const all = d.songs.length && d.songs.every((s) => picked.has(s.id));
   const some = d.songs.some((s) => picked.has(s.id));
-  const songs = d.songs.length ? `<div class="card" style="margin-top:var(--s-6)"><h3 style="margin-bottom:var(--s-2)">Songs</h3><table>
+  const songs = d.songs.length ? `<div class="card section"><h3>Songs</h3><table>
     <thead><tr><th class="c-check"><input type="checkbox" data-song-all ${all ? "checked" : ""} ${!all && some ? "data-mixed" : ""} aria-label="Select all songs"></th>
       <th>Title</th><th class="c-time">Time</th></tr></thead><tbody>
     ${d.songs.map((s) => `<tr class="${picked.has(s.id) ? "on" : ""}"><td class="c-check"><input type="checkbox" data-song-pick="${esc(s.id)}" ${picked.has(s.id) ? "checked" : ""} aria-label="Queue ${esc(s.title)}"></td>
@@ -397,10 +400,10 @@ function searchHtml(d) {
         <div class="t-sub">${esc([s.artists.join(", "), s.album].filter(Boolean).join(" · "))}</div></td>
       <td class="c-time tnum">${s.duration_s ? fmtTime(s.duration_s) : ""}</td></tr>`).join("")}
     </tbody></table></div>` : "";
-  const albums = d.releases.length ? `<h3 style="margin:var(--s-2) 0 var(--s-3)">Albums and singles</h3><div class="grid">${d.releases.map(releaseHtml).join("")}</div>` : "";
-  return `<div class="artist-head"><div class="grow"><div class="xs faint" style="text-transform:uppercase;letter-spacing:.06em">Search</div>
+  const albums = d.releases.length ? `<h3 class="sub-head">Albums and singles</h3><div class="grid">${d.releases.map(releaseHtml).join("")}</div>` : "";
+  return `<div class="artist-head"><div class="grow"><div class="xs faint eyebrow">Search</div>
       <h2>${esc(d.query)}</h2><div class="small muted">${[d.releases.length ? plural(d.releases.length, "album") : "", d.songs.length ? plural(d.songs.length, "song") : ""].filter(Boolean).join(" and ")}
-      <span class="pill" style="margin-left:var(--s-2)">YouTube Music</span></div></div>
+      <span class="pill ml-2">YouTube Music</span></div></div>
       ${d.artist ? `<button class="btn" data-artist-open title="See every release by ${esc(d.artist.name)}">${icon("user")}${esc(d.artist.name)}</button>` : ""}</div>
     ${albums}${songs}`;
 }
@@ -426,7 +429,7 @@ function releaseHtml(r) {
     <button class="pick" data-rel="${esc(key)}" aria-pressed="${q ? (q.trackIds ? "mixed" : "true") : "false"}" aria-label="${esc(r.name)}, ${esc(sub)}, ${state}">
       <div class="art">${r.cover_url ? `<img src="${esc(r.cover_url)}" alt="" loading="lazy">` : ""}
         <span class="tick" aria-hidden="true">${icon(q && q.trackIds ? "minus" : "check")}</span></div>
-      <div class="meta"><div class="name">${esc(r.name)}</div><div class="sub">${esc(sub)}${q && q.trackIds ? ` · <span style="color:var(--warn)">${q.trackIds.length} picked</span>` : ""}</div></div>
+      <div class="meta"><div class="name">${esc(r.name)}</div><div class="sub">${esc(sub)}${q && q.trackIds ? ` · <span class="warn-text">${q.trackIds.length} picked</span>` : ""}</div></div>
     </button>
     <button class="songs" data-songs="${esc(key)}">${icon("list")}Choose songs</button>
   </article>`;
@@ -435,7 +438,7 @@ function releaseHtml(r) {
 function topTracksHtml(d) {
   const key = `tracks:${d.id || d.name}`, q = queue.get(key);
   const picked = new Set(q ? q.trackIds : []);
-  return `<div class="card" style="margin-top:var(--s-6)"><h3 style="margin-bottom:var(--s-2)">Popular songs</h3><table><tbody>
+  return `<div class="card section"><h3>Popular songs</h3><table><tbody>
     ${d.top_tracks.map((t, i) => `<tr class="${picked.has(t.spotify_id) ? "on" : ""}"><td class="c-check"><input type="checkbox" data-top="${esc(t.spotify_id)}" ${picked.has(t.spotify_id) ? "checked" : ""} aria-label="Queue ${esc(t.title)}"></td>
       <td class="c-num tnum">${i + 1}</td><td><span class="t-title">${esc(t.title)}</span></td><td class="t-sub">${esc(t.artists.join(", "))}</td></tr>`).join("")}
     </tbody></table></div>`;
@@ -457,8 +460,8 @@ function collectionHtml(c) {
   const picked = (id) => !!q && (!q.trackIds || q.trackIds.includes(id));
   const total = c.tracks.reduce((sum, t) => sum + t.duration_ms / 1000, 0);
   const cover = (c.tracks[0] || {}).cover_url;
-  return `<div class="artist-head">${cover ? `<img src="${esc(cover)}" alt="" style="border-radius:var(--r-sm)">` : `<span class="ph" style="border-radius:var(--r-sm)"></span>`}
-      <div class="grow"><div class="xs faint" style="text-transform:uppercase;letter-spacing:.06em">${esc(c.kind)}</div><h2>${esc(c.name)}</h2>
+  return `<div class="artist-head">${cover ? `<img src="${esc(cover)}" alt="" class="square">` : `<span class="ph square"></span>`}
+      <div class="grow"><div class="xs faint eyebrow">${esc(c.kind)}</div><h2>${esc(c.name)}</h2>
       <div class="small muted">${c.owner ? `${esc(c.owner)} · ` : ""}${plural(c.tracks.length, "song")} · ${fmtTime(total)}</div></div></div>
     ${(c.warnings || []).map((w) => `<div class="banner">${icon("info", "lg")}<div class="grow small">${esc(w)}</div></div>`).join("")}
     <div class="card">${trackTable(c.tracks, picked, "ct")}</div>`;
@@ -472,8 +475,8 @@ async function openSheet(key) {
   const rel = findRelease(key);
   sheet.innerHTML = `<div class="d-head"><div><h3 id="sheet-title">${esc(rel.name)}</h3><div class="small muted">${esc([rel.year, KIND_LABEL[rel.kind]].filter(Boolean).join(" · "))}</div></div>
     <button class="btn ghost icon" data-close aria-label="Close">${icon("x")}</button></div>
-    <div class="d-body" id="sheet-body"><div class="stack">${Array.from({ length: 8 }, () => `<div class="skeleton" style="height:36px"></div>`).join("")}</div></div>
-    <div class="d-foot"><span class="small muted" id="sheet-count" style="margin-right:auto"></span><button class="btn primary" data-close>Done</button></div>`;
+    <div class="d-body" id="sheet-body"><div class="stack">${Array.from({ length: 8 }, () => `<div class="skeleton line-row"></div>`).join("")}</div></div>
+    <div class="d-foot"><span class="small muted push" id="sheet-count"></span><button class="btn primary" data-close>Done</button></div>`;
   if (!sheet.open) sheet.showModal();
   try { await releaseTracks(rel); if (view.sheetKey === key) renderSheet(); }
   catch (err) { $("#sheet-body").innerHTML = `<div class="empty">${icon("alert")}<p>${esc(err.message)}</p><button class="btn" data-retry-sheet>${icon("refresh")}Try again</button></div>`; }
@@ -623,13 +626,13 @@ function renderQueue() {
 function renderQueueDialog() {
   const entries = [...queue.values()];
   $("#queue-dialog").innerHTML = `<div class="d-head"><h3 id="queue-title">Download queue</h3><button class="btn ghost icon" data-close aria-label="Close">${icon("x")}</button></div>
-    <div class="d-body qlist" style="max-height:60vh">${entries.length ? entries.map((q) => `<div class="qrow">
+    <div class="d-body qlist">${entries.length ? entries.map((q) => `<div class="qrow">
       ${q.cover ? `<img src="${esc(q.cover)}" alt="">` : `<span class="ph"></span>`}
       <div class="grow"><div class="t-title">${esc(q.name)}${q.year ? ` <span class="faint small">${esc(q.year)}</span>` : ""}</div>
         <div class="t-sub">${esc(q.artist || "")} · ${q.kind === "tracks" || q.kind === "songs" ? plural(q.trackIds.length, "song") : q.trackIds ? `${q.trackIds.length} of ${q.total || "?"} songs` : q.total ? `all ${q.total} songs` : "whole release"}${q.kind === "ytmusic" || q.kind === "songs" ? " · YouTube Music" : ""}</div></div>
       <button class="btn ghost icon" data-q-remove="${esc(q.key)}" aria-label="Remove ${esc(q.name)}" title="Remove">${icon("x")}</button></div>`).join("")
       : `<div class="empty"><p>The queue is empty.</p></div>`}</div>
-    <div class="d-foot"><button class="btn ghost danger" data-q-clear ${entries.length ? "" : "disabled"} style="margin-right:auto">Clear queue</button>
+    <div class="d-foot"><button class="btn ghost danger push" data-q-clear ${entries.length ? "" : "disabled"}>Clear queue</button>
       <button class="btn primary" data-q-go ${entries.length ? "" : "disabled"}>${icon("download")}Download all</button></div>`;
 }
 async function downloadQueue() {
@@ -678,8 +681,10 @@ const STATUS = {
   downloading: ["info", "download", "Downloading"], converting: ["info", "loader", "Converting"], tagging: ["info", "loader", "Tagging"],
   done: ["ok", "check", "Done"], skipped: ["warn", "minus", "Skipped"], failed: ["bad", "alert", "Failed"],
 };
-const JOB_STATE = { resolving: ["info", "Reading link"], queued: ["", "Waiting"], running: ["info", "Downloading"],
-                    finished: ["ok", "Finished"], cancelled: ["warn", "Cancelled"], error: ["bad", "Couldn't start"] };
+const JOB_STATE = { resolving: ["info", "loader", "Reading link"], queued: ["", "minus", "Waiting"], running: ["info", "loader", "Downloading"],
+                    finished: ["ok", "check", "Finished"], cancelled: ["warn", "stop", "Cancelled"], error: ["bad", "alert", "Couldn't start"] };
+const jobPill = (state, running = false) => { const [kind, ic, label] = JOB_STATE[state] || ["", "info", state];
+  return `<span class="pill ${kind}">${icon(ic, running ? "spin" : "")}${esc(label)}</span>`; };
 
 function upsertJob(job) {
   const known = state.jobs.get(job.id);
@@ -760,17 +765,16 @@ function updateJobView(v, job) {
   const finished = (c.done || 0) + (c.skipped || 0) + (c.failed || 0);
   const pct = job.total ? Math.round(100 * finished / job.total) : 0;
   const running = ACTIVE.includes(job.state);
-  const [kind, label] = JOB_STATE[job.state] || ["", job.state];
   v.el.setAttribute("aria-busy", String(running));
   setHtml(v.head, `<div class="grow"><h3>${esc(job.name)}</h3><div class="small faint">${esc(job.kind || "")}${job.created_at ? ` · ${when(job.created_at)}` : ""}</div></div>
-      <div class="row"><span class="pill ${kind}">${running ? icon("loader", "spin") : ""}${label}</span>
+      <div class="row">${jobPill(job.state, running)}
         ${running ? `<button class="btn sm" data-cancel="${job.id}">${icon("stop")}Cancel</button>` : ""}
         ${!running && job.retryable && job.taskIds ? `<button class="btn sm" data-retry="${job.id}">${icon("refresh")}Retry ${job.retryable} failed</button>` : ""}</div>`);
   const paused = running && job.paused_until ? new Date(job.paused_until) : null;
-  setHtml(v.notes, `${paused ? `<div class="row" style="margin-top:var(--s-2);gap:var(--s-2)"><p class="small" style="color:var(--warn)">${icon("alert")} YouTube paused downloads from your connection. TuneGrab continues at ${paused.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.</p>
+  setHtml(v.notes, `${paused ? `<div class="row mt-2"><p class="small warn-text">${icon("alert")} YouTube paused downloads from your connection. TuneGrab continues at ${paused.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.</p>
       <button class="btn sm" data-resume="${job.id}">${icon("refresh")}Try now</button></div>` : ""}
-    ${job.error ? `<p class="small error-text" style="margin-top:var(--s-2)">${esc(job.error)}</p>` : ""}
-    ${(job.warnings || []).map((w) => `<p class="small" style="color:var(--warn);margin-top:var(--s-2)">${esc(w)}</p>`).join("")}`);
+    ${job.error ? `<p class="small error-text mt-2">${esc(job.error)}</p>` : ""}
+    ${(job.warnings || []).map((w) => `<p class="small warn-text mt-2">${esc(w)}</p>`).join("")}`);
   setHtml(v.progress, job.total ? `<div class="bar ${c.failed ? "warn" : ""}" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(job.name)} progress"><i style="width:${pct}%"></i></div>
       <div class="job-stats tnum"><span>${finished} of ${job.total}</span><span>${c.done || 0} done</span>${c.skipped ? `<span>${c.skipped} already had</span>` : ""}${c.failed ? `<span class="error-text">${c.failed} failed</span>` : ""}</div>` : "");
   const ids = job.taskIds || [];
@@ -807,12 +811,12 @@ function renderTask(t) {
   const job = state.jobs.get(t.job_id);
   // only songs matched by search can take another link; videos already came from one
   const canFix = t.status === "failed" && !t.retried && job && job.kind !== "video" && !ACTIVE.includes(job.state);
-  const fixBtn = canFix ? `<button class="btn sm ghost" style="margin-top:var(--s-1)" data-fix="${esc(t.job_id)}" data-task="${esc(t.id)}">${icon("external")}Use a YouTube link</button>` : "";
+  const fixBtn = canFix ? `<button class="btn sm ghost mt-1" data-fix="${esc(t.job_id)}" data-task="${esc(t.id)}">${icon("external")}Use a YouTube link</button>` : "";
   const showBtn = (t.status === "done" || t.status === "skipped") && t.path
     ? `<button class="btn sm ghost" data-show="${esc(t.path)}" aria-label="Show ${esc(t.title)} in folder">${icon("folder")}Show</button>` : "";
   const detail = t.status === "failed" ? `<div class="small error-text">${esc(t.error)}</div>${fixBtn}`
     : t.status === "skipped" && t.message ? `<div class="xs faint">${esc(t.message)}</div>`
-    : t.status === "done" ? `${t.source ? `<div class="xs ${t.low_quality ? "warn-text" : "faint"}" title="What YouTube served, before conversion">${t.low_quality ? icon("alert") : ""}Source: ${esc(t.source)}</div>` : ""}${reviewHtml(t)}`
+    : t.status === "done" ? `${t.source ? `<div class="xs ${t.low_quality ? "warn-text" : "faint"}" title="What YouTube served, before conversion">${t.low_quality ? `${icon("alert")} ` : ""}Source: ${esc(t.source)}</div>` : ""}${reviewHtml(t)}`
     : busy && t.message ? `<div class="xs faint">${esc(t.message)}</div>` : "";
   const match = t.match ? `<a class="xs" href="${esc(t.match.url)}" target="_blank" rel="noopener" title="${esc(t.match.reason)}">YouTube ${icon("external")} <span class="tnum">match ${t.match.score}</span></a>` : "";
   return `<tr data-task="${esc(t.id)}"><td class="c-num tnum">${t.position}</td>
@@ -928,11 +932,11 @@ async function loadHistory() {
 function renderHistory() {
   const live = new Set(state.jobs.keys());
   const rows = state.history.filter((h) => !live.has(h.id));
-  setHtml($("#history"), rows.length ? `<div class="card history" style="margin-top:var(--s-4)"><h3 style="margin-bottom:var(--s-2)">Earlier</h3><table><tbody>
-    ${rows.map((h) => { const c = h.counts || {}; const [kind, label] = JOB_STATE[h.state] || ["", h.state];
+  setHtml($("#history"), rows.length ? `<div class="card history mt-4"><h3>Earlier</h3><table><tbody>
+    ${rows.map((h) => { const c = h.counts || {};
       return `<tr><td><div class="t-title">${esc(h.name)}</div><div class="xs faint">${when(h.finished_at || h.created_at)}</div></td>
         <td class="tnum muted">${c.done || 0} done${c.skipped ? ` · ${c.skipped} already had` : ""}${c.failed ? ` · <span class="error-text">${c.failed} failed</span>` : ""}</td>
-        <td class="c-end"><span class="pill ${kind}">${label}</span></td></tr>`; }).join("")}
+        <td class="c-end">${jobPill(h.state)}</td></tr>`; }).join("")}
     </tbody></table></div>` : "");
 }
 $("#tab-jobs").addEventListener("click", async (e) => {
@@ -971,9 +975,9 @@ $("#tab-jobs").addEventListener("click", async (e) => {
 
 // ============================================================== library
 async function loadLibrary() {
-  if (!state.library) $("#library").innerHTML = `<div class="stack" style="margin-top:var(--s-6)">${Array.from({ length: 4 }, () => `<div class="skeleton" style="height:72px"></div>`).join("")}</div>`;
+  if (!state.library) $("#library").innerHTML = `<div class="stack section">${Array.from({ length: 4 }, () => `<div class="skeleton block"></div>`).join("")}</div>`;
   try { state.library = await api("/api/library"); renderLibrary(); }
-  catch (err) { $("#library").innerHTML = `<div class="card empty" style="margin-top:var(--s-6)">${icon("alert")}<h3>Couldn't load your library</h3><p>${esc(err.message)}</p></div>`; }
+  catch (err) { $("#library").innerHTML = `<div class="card empty section">${icon("alert")}<h3>Couldn't load your library</h3><p>${esc(err.message)}</p></div>`; }
 }
 $("#lib-refresh").addEventListener("click", async (e) => { e.currentTarget.disabled = true; await loadLibrary(); e.currentTarget.disabled = false; });
 let filterTimer = 0;
@@ -985,21 +989,21 @@ function renderLibrary() {
   const q = $("#lib-filter").value.trim().toLowerCase();
   const tracks = lib.tracks.filter((t) => !q || [t.title, t.album, t.album_artist, ...t.artists].some((v) => (v || "").toLowerCase().includes(q)));
   const missing = lib.tracks.filter((t) => !t.exists).length;
-  $("#lib-meta").innerHTML = `${plural(lib.tracks.length, "song")} in <span class="mono">${esc(lib.root)}</span>${missing ? ` · <span style="color:var(--warn)">${missing} moved or deleted</span>` : ""}`;
-  $("#playlists").innerHTML = lib.playlists.length && !q ? `<div class="card" style="margin-top:var(--s-6)"><h3 style="margin-bottom:var(--s-2)">Playlists</h3><table><tbody>
+  $("#lib-meta").innerHTML = `${plural(lib.tracks.length, "song")} in <span class="mono">${esc(lib.root)}</span>${missing ? ` · <span class="warn-text">${missing} moved or deleted</span>` : ""}`;
+  $("#playlists").innerHTML = lib.playlists.length && !q ? `<div class="card section"><h3>Playlists</h3><table><tbody>
     ${lib.playlists.map(playlistRow).join("")}</tbody></table></div>` : "";
   const videos = (lib.videos || []).filter((v) => !q || [v.title, v.uploader].some((x) => (x || "").toLowerCase().includes(q)));
-  $("#videos").innerHTML = videos.length ? `<div class="card" style="margin-top:var(--s-6)"><h3 style="margin-bottom:var(--s-2)">Videos</h3><table><tbody>
+  $("#videos").innerHTML = videos.length ? `<div class="card section"><h3>Videos</h3><table><tbody>
     ${videos.map((v) => `<tr><td><div class="t-title">${esc(v.title)}</div><div class="t-sub">${esc(v.uploader)}</div></td>
       <td class="xs faint">${v.mode === "audio" ? `Audio${v.format ? ` · ${esc(v.format.toUpperCase())}` : ""}` : "Video"}${v.clip ? " · clip" : ""}${v.source ? ` · ${esc(v.source)}` : ""}</td>
       <td class="c-time tnum">${v.duration_s ? fmtTime(v.duration_s) : ""}</td>
-      <td class="c-end">${v.exists ? `<button class="btn ghost sm" data-show="${esc(v.path)}" aria-label="Show ${esc(v.title)} in folder">${icon("folder")}Show</button>` : `<span class="xs" style="color:var(--warn)">moved or deleted</span>`}</td></tr>`).join("")}
+      <td class="c-end">${v.exists ? `<button class="btn ghost sm" data-show="${esc(v.path)}" aria-label="Show ${esc(v.title)} in folder">${icon("folder")}Show</button>` : `<span class="xs warn-text">moved or deleted</span>`}</td></tr>`).join("")}
     </tbody></table></div>` : "";
   if (!tracks.length) {
     if (videos.length) { $("#library").innerHTML = ""; return; }
     $("#library").innerHTML = lib.tracks.length
-      ? `<div class="card empty" style="margin-top:var(--s-6)">${icon("search")}<p>Nothing matches “${esc(q)}”.</p></div>`
-      : `<div class="card empty" style="margin-top:var(--s-6)">${icon("library")}<h3>Your library is empty</h3><p>Songs you download appear here, grouped by artist and album.</p><button class="btn" data-goto-get>${icon("search")}Find music</button></div>`;
+      ? `<div class="card empty section">${icon("search")}<p>Nothing matches “${esc(q)}”.</p></div>`
+      : `<div class="card empty section">${icon("library")}<h3>Your library is empty</h3><p>Songs you download appear here, grouped by artist and album.</p><button class="btn" data-goto-get>${icon("search")}Find music</button></div>`;
     return;
   }
   const byArtist = new Map();
@@ -1093,21 +1097,21 @@ function renderRemoved() {
   const head = (title) => `<div class="d-head"><h3 id="removed-title">${esc(title)}</h3><button class="btn ghost icon" data-close aria-label="Close">${icon("x")}</button></div>`;
   if (r.step === "confirm") {
     d.innerHTML = `${head(`Delete ${plural(picked.length, "file")}?`)}
-      <div class="d-body" style="max-height:60vh"><p class="small">These files are deleted from your computer for good. They are not moved to the Recycle Bin or Trash.</p>
+      <div class="d-body"><p class="small">These files are deleted from your computer for good. They are not moved to the Recycle Bin or Trash.</p>
         <ul class="file-list">${picked.map((g) => `<li><div>${song(g)}</div><div class="xs mono faint">${esc(g.path)}</div></li>`).join("")}</ul></div>
-      <div class="d-foot"><button class="btn ghost" data-back ${r.busy ? "disabled" : ""} style="margin-right:auto">Back</button>
+      <div class="d-foot"><button class="btn ghost push" data-back ${r.busy ? "disabled" : ""}>Back</button>
         <button class="btn danger armed" data-delete ${r.busy ? "disabled" : ""}>${r.busy ? icon("loader", "spin") : ""}Delete ${plural(picked.length, "file")}</button></div>`;
     $("[data-back]", d).focus(); // the safe choice has focus, so Enter can't delete
     return;
   }
   const NOTE = { shared: "Kept: another playlist has it", not_downloaded: "No file in your library" };
   d.innerHTML = `${head(`No longer in ${r.name}`)}
-    <div class="d-body" style="max-height:60vh"><p class="small muted">${plural(r.gone.length, "song")} left this playlist. The files are still in your library; nothing is deleted unless you choose it here.</p>
+    <div class="d-body"><p class="small muted">${plural(r.gone.length, "song")} left this playlist. The files are still in your library; nothing is deleted unless you choose it here.</p>
       ${r.failed.map((f) => `<p class="small error-text" role="alert">Couldn't delete ${esc(f.path)}: ${esc(f.reason)}. Close any program using it and try again.</p>`).join("")}
       <ul class="file-list">${r.gone.map((g) => g.state === "file"
         ? `<li><label class="check"><input type="checkbox" data-pick="${esc(g.key)}" ${r.picked.has(g.key) ? "checked" : ""}><span><span>${song(g)}</span><span class="xs mono faint">${esc(g.path)}</span></span></label></li>`
         : `<li><div>${song(g)}</div><div class="xs faint">${NOTE[g.state] || ""}</div></li>`).join("")}</ul></div>
-    <div class="d-foot"><button class="btn ghost" data-keep-all ${r.busy ? "disabled" : ""} style="margin-right:auto">Keep all files</button>
+    <div class="d-foot"><button class="btn ghost push" data-keep-all ${r.busy ? "disabled" : ""}>Keep all files</button>
       <button class="btn danger" data-next ${picked.length && !r.busy ? "" : "disabled"}>Delete ${plural(picked.length, "file")}…</button></div>`;
 }
 $("#removed-dialog").addEventListener("change", (e) => {
@@ -1181,8 +1185,7 @@ function fillForm(values) {
 }
 function setSettingsMsg(text, kind = "") {
   const m = $("#settings-msg"); m.textContent = text;
-  m.className = `small ${kind === "bad" ? "error-text" : kind === "dirty" ? "" : "muted"}`;
-  if (kind === "dirty") m.style.color = "var(--warn)"; else m.style.color = "";
+  m.className = `small ${kind === "bad" ? "error-text" : kind === "dirty" ? "warn-text" : "muted"}`;
 }
 function dirty() { return savedSettings && JSON.stringify(readForm()) !== JSON.stringify(savedSettings); }
 async function loadSettings() {
@@ -1266,7 +1269,9 @@ function connect() {
   source.addEventListener("job", (e) => {
     const job = JSON.parse(e.data), before = state.jobs.get(job.id);
     upsertJob(job);
-    if (before && ACTIVE.includes(before.state) && !ACTIVE.includes(job.state)) {
+    if (before && ACTIVE.includes(before.state) && job.state === "error") {
+      toast(`Couldn't start ${job.name}${job.error ? `: ${job.error}` : "."}`, { kind: "bad", timeout: 8000 });
+    } else if (before && ACTIVE.includes(before.state) && !ACTIVE.includes(job.state)) {
       const c = job.counts || {};
       // a playlist check that found nothing new already said so
       if (!(quietJobs.delete(job.id) && !c.failed && !c.done)) toast(`${job.name}: ${c.done || 0} downloaded${c.failed ? `, ${c.failed} failed` : ""}.`, { kind: c.failed ? "warn" : "ok" });

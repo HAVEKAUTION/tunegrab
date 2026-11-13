@@ -4,6 +4,8 @@
    3:1 for large text / UI parts) in the dark theme and in the light theme.
 2. The light theme redefines every colour token (a forgotten one would keep its dark value).
 3. No raw colour values outside the token blocks (data: URIs excepted).
+4. Radii, shadows, font sizes and layers come from tokens, and markup carries no inline
+   styles (a progress bar's width is the one value that has to be set per element).
 
 Run: uv run python scripts/check_design.py
 """
@@ -102,6 +104,31 @@ def raw_colours(css: str, html: str, script: str) -> list[str]:
     return sorted(set(raw))
 
 
+# property -> what a value may start with besides var(--token)
+TOKEN_ONLY = {
+    "border-radius": ("0", "inherit"),
+    "box-shadow": ("none", "0 0 0 "),  # "0 0 0 Npx colour" is a ring, not a shadow
+    "font-size": ("inherit",),
+    "z-index": (),
+}
+
+
+def raw_values(css: str) -> list[str]:
+    """Declarations that bypass the radius, shadow, type-size or layer tokens."""
+    body = DARK.sub("", LIGHT.sub("", css, count=1), count=1)
+    found = []
+    for prop, allowed in TOKEN_ONLY.items():
+        for value in re.findall(rf"(?<![\w-]){prop}:\s*([^;}}]+)", body):
+            if not value.startswith(("var(--", *allowed)):
+                found.append(f"{prop}: {value.strip()}")
+    return sorted(set(found))
+
+
+def inline_styles(html: str, script: str) -> list[str]:
+    styles = re.findall(r'style="([^"]*)"', html + script)
+    return sorted({s for s in styles if not re.fullmatch(r"width:\$\{[^}]+\}%", s)})
+
+
 def main() -> int:
     css = (STATIC / "app.css").read_text(encoding="utf-8")
     html = (STATIC / "index.html").read_text(encoding="utf-8")
@@ -117,13 +144,16 @@ def main() -> int:
     problems = {
         "Colour tokens the light theme doesn't set": missing_in_light(css),
         "Raw colours outside tokens": raw_colours(css, html, script),
+        "Values that should be tokens": raw_values(css),
+        "Inline styles in markup": inline_styles(html, script),
     }
     for label, found in problems.items():
         if found:
             failed += 1
             print(f"{label}: {found}")
     if not any(problems.values()):
-        print("Light theme sets every colour token; no raw colours outside the token blocks.")
+        print("Light theme sets every colour token; no raw colours, raw radii, shadows,")
+        print("font sizes or layers outside the token blocks; no inline styles.")
     return 1 if failed else 0
 
 

@@ -37,6 +37,9 @@ All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
   version. Songs downloaded before this version show their format only.
 
 ### Fixed
+- A link that couldn't be read ended with a green "0 downloaded" message. It now says it
+  couldn't start, and why.
+- The song panel's "Done" button sits at the bottom of the panel instead of under the list.
 - **`tunegrab sync --remove` could offer to delete songs that hadn't left the playlist.**
   Without a Spotify login only the first 100 songs of a playlist can be read; the rest looked
   "removed". When a playlist can't be read in full, sync (CLI and app) now says so and treats
@@ -73,6 +76,9 @@ All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
 - The queue bar says "1 song", not "1 songs"; Settings fields line up when only one has help.
 
 ### Changed
+- **About** (Settings) now names the licence and links to the source.
+- A finished download's status pill carries the same tick as its songs; loading placeholders
+  pulse instead of sweeping a gradient.
 - Downloads are paced to stay under YouTube's limit: about 30 back to back, then 250 an hour
   (1,000 with browser cookies). If YouTube still says "slow down" three times in a job,
   TuneGrab pauses for an hour (the app shows when it continues, with a Try now button); after

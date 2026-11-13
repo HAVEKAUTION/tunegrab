@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<svg width="0" height="0" class="sprite" aria-hidden="true">
   <symbol id="i-logo" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3" fill="currentColor"/><circle cx="18" cy="16" r="3" fill="currentColor"/></symbol>
   <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
@@ -38,7 +38,7 @@
 <div class="app">
   <aside class="sidebar" aria-label="Main">
     <div class="brand"><span class="mark"><svg class="i"><use href="#i-logo"/></svg></span>TuneGrab</div>
-    <nav class="stack" style="gap:var(--s-1)">
+    <nav class="stack snug">
       <button class="nav-item" data-tab="get"><svg class="i lg"><use href="#i-search"/></svg>Get music<kbd>1</kbd></button>
       <button class="nav-item" data-tab="jobs"><svg class="i lg"><use href="#i-jobs"/></svg>Downloads<span id="active-count" class="count hidden" aria-label="active downloads">0</span><kbd>2</kbd></button>
       <button class="nav-item" data-tab="library"><svg class="i lg"><use href="#i-library"/></svg>Library<kbd>3</kbd></button>
@@ -71,11 +71,11 @@
           <button class="btn primary" type="submit" id="browse-btn"><svg class="i"><use href="#i-search"/></svg>Browse</button>
           <button class="btn" type="button" id="now-btn" title="Download the whole link straight away, or the top song for what you typed"><svg class="i"><use href="#i-download"/></svg>Download now</button>
         </form>
-        <div id="finder-error" class="small error-text" role="alert" style="margin-top:var(--s-2)"></div>
-        <p class="small faint" style="margin-top:var(--s-2)">Have a playlist or Liked Songs export?
-          <button type="button" id="csv-btn" class="linkish" style="font-size:var(--fs-sm);color:var(--info)" title="CSV files from Exportify (exportify.app) or any list with Track Name and Artist Name columns">Import a CSV file</button>
+        <div id="finder-error" class="small error-text mt-2" role="alert"></div>
+        <p class="small faint mt-2">Have a playlist or Liked Songs export?
+          <button type="button" id="csv-btn" class="linkish link" title="CSV files from Exportify (exportify.app) or any list with Track Name and Artist Name columns">Import a CSV file</button>
           <input type="file" id="csv-file" accept=".csv,text/csv" hidden></p>
-        <div id="browse" style="margin-top:var(--s-6)"></div>
+        <div id="browse" class="section"></div>
       </section>
 
       <!-- ============================================================ DOWNLOADS -->
@@ -92,7 +92,7 @@
         <div class="page-head"><div><h1 id="lib-title">Library</h1><p class="muted" id="lib-meta">Everything TuneGrab has saved.</p></div>
           <div class="row"><button class="btn" id="lib-refresh"><svg class="i"><use href="#i-refresh"/></svg>Refresh</button>
             <button class="btn" id="lib-open"><svg class="i"><use href="#i-folder"/></svg>Open folder</button></div></div>
-        <label class="search" style="display:block;max-width:420px"><span class="sr">Filter library</span><svg class="i lg"><use href="#i-search"/></svg>
+        <label class="search narrow"><span class="sr">Filter library</span><svg class="i lg"><use href="#i-search"/></svg>
           <input id="lib-filter" class="input" type="search" placeholder="Filter by title, artist or album"></label>
         <input type="file" id="sync-file" accept=".csv,text/csv" hidden>
         <div id="playlists"></div>
@@ -105,7 +105,7 @@
         <div class="page-head"><div><h1 id="set-title">Settings</h1><p class="muted">Changes apply to new downloads.</p></div></div>
         <form id="settings-form" class="settings" autocomplete="off" novalidate>
           <div class="card"><h3>Music folder</h3><p class="muted small">Where downloaded files are saved.</p>
-            <div class="row" style="flex-wrap:nowrap"><input id="s-output_dir" class="input" type="text" aria-label="Music folder">
+            <div class="row nowrap"><input id="s-output_dir" class="input" type="text" aria-label="Music folder">
               <button type="button" id="s-browse" class="btn"><svg class="i"><use href="#i-folder"/></svg>Choose…</button>
               <button type="button" id="s-open" class="btn ghost" title="Open in File Explorer"><svg class="i"><use href="#i-external"/></svg>Open</button></div></div>
           <div class="card"><h3>Audio</h3><p class="muted small">YouTube audio is lossy. M4A and Opus keep the original stream; MP3 and FLAC re-encode it without adding quality.</p>
@@ -131,7 +131,7 @@
                 <option value="brave">Brave</option><option value="safari">Safari</option><option value="opera">Opera</option><option value="vivaldi">Vivaldi</option></select>
                 <span class="help">Firefox works best. On Windows, Chrome, Edge and other Chromium browsers usually have to be closed first, and new versions may not be readable at all.</span></label>
             </div>
-            <div class="banner" id="cookies-warn" style="margin:var(--s-4) 0 0"><svg class="i lg"><use href="#i-alert"/></svg><div class="grow small">
+            <div class="banner in-card" id="cookies-warn"><svg class="i lg"><use href="#i-alert"/></svg><div class="grow small">
               YouTube can restrict or ban the Google account used for downloading. Use an account you can afford to lose, not your main one.</div></div></div>
           <div class="card"><h3>Downloads</h3><p class="muted small">How TuneGrab works through your queue.</p>
             <div class="form-grid">
@@ -139,7 +139,7 @@
               <label class="field"><span class="label">Playlists</span><select id="s-playlist_mode" class="select">
                 <option value="m3u">Playlist file (.m3u8)</option><option value="folder">Copy songs into a playlist folder</option></select></label>
             </div>
-            <div class="stack" style="gap:var(--s-2);margin-top:var(--s-4)">
+            <div class="stack tight mt-4">
               <label class="check"><input id="s-lyrics" type="checkbox"> Add lyrics to files</label>
               <label class="check"><input id="s-lrc" type="checkbox"> Also save synced lyrics (.lrc)</label></div></div>
           <div class="card"><h3>File names</h3><p class="muted small">Fields: <span class="mono">{title} {artist} {artists} {album} {album_artist} {year} {date} {track_number:02d} {disc_number} {total_tracks} {playlist} {position:03d} {isrc} {ext}</span></p>
@@ -149,23 +149,23 @@
             </div></div>
           <div class="card"><h3>Updates</h3>
             <label class="check"><input id="s-check_updates" type="checkbox"> Tell me when a new TuneGrab or yt-dlp is out</label>
-            <p class="help" style="margin:var(--s-2) 0 0">Once a day TuneGrab asks GitHub and PyPI for their newest version numbers. Nothing about you or your music is sent.</p></div>
+            <p class="help mt-2">Once a day TuneGrab asks GitHub and PyPI for their newest version numbers. Nothing about you or your music is sent.</p></div>
           <div class="savebar"><span id="settings-msg" class="small muted" role="status">No unsaved changes.</span>
             <div class="row"><button type="button" class="btn ghost" id="s-reset">Reset to defaults</button>
               <button type="submit" class="btn primary" id="s-save"><svg class="i"><use href="#i-check"/></svg>Save</button></div></div>
         </form>
-        <div class="card" style="margin-top:var(--s-4)"><div class="row between"><h3>System</h3>
+        <div class="card mt-4"><div class="row between"><h3>System</h3>
           <div class="row"><button class="btn sm ghost" id="sys-update" data-update-ytdlp title="Get the newest yt-dlp. YouTube changes often, and an old yt-dlp is the most common reason downloads fail."><svg class="i"><use href="#i-download"/></svg>Update yt-dlp</button>
           <button class="btn sm" id="sys-recheck"><svg class="i"><use href="#i-refresh"/></svg>Check again</button></div></div>
-          <p class="muted small" style="margin:var(--s-1) 0 var(--s-3)">Tools TuneGrab needs to download and convert audio.</p>
+          <p class="muted small lead">Tools TuneGrab needs to download and convert audio.</p>
           <table class="checks"><tbody id="sys-table"></tbody></table></div>
         <div class="card"><div class="row between"><h3>Storage</h3>
           <button class="btn sm" id="st-clean"><svg class="i"><use href="#i-x"/></svg>Free up space</button></div>
-          <p class="muted small" style="margin:var(--s-1) 0 var(--s-3)">What TuneGrab keeps besides your music. Freeing space never touches your music, settings or download history.</p>
+          <p class="muted small lead">What TuneGrab keeps besides your music. Freeing space never touches your music, settings or download history.</p>
           <table class="checks" aria-label="Storage"><tbody id="st-table"><tr><td class="muted small">Measuring…</td></tr></tbody></table>
-          <label class="check small" style="margin-top:var(--s-3)"><input id="st-uv" type="checkbox"> Include uv's package cache (shared by every uv project; only unused packages are removed)</label></div>
+          <label class="check small mt-3"><input id="st-uv" type="checkbox"> Include uv's package cache (shared by every uv project; only unused packages are removed)</label></div>
         <div class="card"><h3>About</h3>
-          <dl class="kv" id="about" style="margin-top:var(--s-3)"></dl></div>
+          <dl class="kv mt-3" id="about"></dl></div>
       </section>
     </div>
   </main>
@@ -191,7 +191,7 @@
 <dialog id="fix-dialog" class="modal" aria-labelledby="fix-title">
   <form id="fix-form" novalidate>
     <div class="d-head"><h3 id="fix-title">Use a YouTube link</h3><button type="button" class="btn ghost icon" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
-    <div class="d-body" style="display:grid;gap:var(--s-3)">
+    <div class="d-body form">
       <p class="small"><span class="muted">Song:</span> <strong id="fix-song"></strong></p>
       <label class="field"><span class="label">YouTube or YouTube Music link</span>
         <input id="fix-url" class="input" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://music.youtube.com/watch?v=…">
