@@ -98,6 +98,8 @@ main { min-width: 0; }
 .btn.ghost { background: none; border-color: transparent; color: var(--text-2); }
 .btn.ghost:hover { background: var(--n-3); color: var(--text-1); }
 .btn.danger:hover { border-color: var(--bad); color: var(--bad); }
+.btn.danger.armed { border-color: var(--bad); color: var(--bad); }
+.btn.danger.armed:hover { background: var(--bad-soft); }
 .btn.sm { height: 30px; padding: 0 var(--s-3); font-size: var(--fs-sm); }
 .btn.icon { width: 32px; padding: 0; }
 .btn:disabled, .btn[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
@@ -183,6 +185,14 @@ dialog.sheet { margin: 0 0 0 auto; height: 100vh; max-height: 100vh; width: min(
 dialog.sheet[open] { display: flex; animation: slide var(--t-med) var(--ease); }
 @keyframes slide { from { transform: translateX(24px); opacity: 0; } }
 dialog.modal { width: min(520px, calc(100vw - 32px)); }
+dialog.modal.wide { width: min(680px, calc(100vw - 32px)); }
+/* files named in a dialog (songs that left a playlist) */
+.file-list { list-style: none; margin: var(--s-3) 0 0; padding: 0; }
+.file-list li { padding: var(--s-2) 0; border-top: var(--hair); }
+.file-list .check { display: flex; align-items: flex-start; gap: var(--s-3); }
+.file-list .check input { margin-top: var(--s-1); flex: none; }
+.file-list .check > span { display: grid; gap: var(--s-1); min-width: 0; }
+.file-list .mono { font-size: var(--fs-xs); overflow-wrap: anywhere; }
 
 /* ===================================================================== get music */
 .finder { display: flex; gap: var(--s-2); flex-wrap: wrap; align-items: center; }

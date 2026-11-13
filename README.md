@@ -130,8 +130,12 @@ just a clip of it, or only its audio.
   Latin accents are folded (Beyoncé = Beyonce).
 - When two results score the same, YouTube's own ranking decides.
 - Songs that score below the threshold (default 70) are flagged instead of downloaded wrongly.
-- Fix a bad match once (**Use a YouTube link** in the app, or `tunegrab fix`) and
-  TuneGrab remembers it.
+- A match TuneGrab isn't sure about (score under 85, or a "live" / "remix" / "cover" video for
+  a plain song) is downloaded but marked **Check this match**: open it to compare the other
+  candidates, listen, and swap with one click. The old file is replaced only once the new
+  one is ready.
+- Fix a bad match once (**Check this match** or **Use a YouTube link** in the app, or
+  `tunegrab fix`) and TuneGrab remembers it.
 
 </details>
 
@@ -143,6 +147,12 @@ just a clip of it, or only its audio.
 - Everything you've downloaded, grouped by artist and album, with covers.
 - Instant filter by title, artist or album (fast even with thousands of songs).
 - **Show** opens a song's folder; flags files you've moved or deleted.
+- Each song shows what YouTube actually served ("MP3 · from Opus 129 kbps") and is marked
+  when only a low-quality source existed.
+- **Check for new songs** on a playlist downloads what was added and lists what left it.
+  Files of songs that left are deleted only if you tick them and confirm a list of every
+  file; songs another playlist still has are never deleted. For a CSV playlist, pick a newer
+  export of it.
 
 <img src="docs/images/library.jpg" alt="The Library screen listing an album with its cover art" width="800">
 
@@ -395,7 +405,9 @@ and so does a single **Track URI** column of Spotify links. From a terminal:
 - **Failed:** open **Downloads** and press **Retry failed songs**. Each failure shows its reason.
 - **Not found at all:** press **Use a YouTube link** under the failed song, paste the right
   video (there's a search link right in the dialog) and press **Download this one**.
-- **Wrong version downloaded:** run `tunegrab match <spotify-link>` to see the scores, then
+- **Wrong version downloaded:** songs TuneGrab had doubts about show **Check this match** in
+  Downloads and Library; pick another candidate there. For any other song, run
+  `tunegrab match <spotify-link>` to see the scores, then
   `tunegrab fix <spotify-track-link> <youtube-link>` to force the right video. TuneGrab
   remembers the fix for next time.
 
@@ -708,6 +720,9 @@ uv run tunegrab serve --port 8766
 <summary><b>A song matched the wrong version</b></summary>
 
 <br>
+
+If the song shows **Check this match** (Downloads or Library), open it and press **Use this
+one** on the right video. Otherwise:
 
 ```powershell
 uv run tunegrab match <spotify-link>                       # see the scores

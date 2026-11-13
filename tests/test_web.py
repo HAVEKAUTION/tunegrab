@@ -14,6 +14,7 @@ from tests.fakes import (
     ALBUM_ID,
     COVER_VIDEO,
     LIVE_VIDEO,
+    PLAYLIST_ID,
     STUDIO_VIDEO,
     FakeAudio,
     FakeServices,
@@ -22,7 +23,7 @@ from tests.fakes import (
 )
 from tunegrab.config import Settings, read_config_file
 from tunegrab.matching.matcher import Matcher
-from tunegrab.models import Track
+from tunegrab.models import Collection, Track
 from tunegrab.services import Services
 from tunegrab.web import app as web_app
 from tunegrab.web import jobs as web_jobs
@@ -863,3 +864,119 @@ def test_sure_matches_have_no_review(client: TestClient) -> None:
     tracks = client.get("/api/library").json()["tracks"]
     assert all(t["review"] is None and t["source"] == "Opus 129 kbps" for t in tracks)
     assert not any(t["low_quality"] for t in tracks)
+
+
+# --- playlist sync --------------------------------------------------------------------
+
+PLAYLIST = f"https://open.spotify.com/playlist/{PLAYLIST_ID}"
+SYNC, REMOVED = "/api/playlists/sync", "/api/playlists/removed"
+
+
+def download_playlist(client: TestClient, services: FakeServices, numbers: list[int]) -> None:
+    services.metadata.tracks = [make_track(n) for n in numbers]
+    wait_for(client, client.post("/api/jobs", json={"url": PLAYLIST}).json()["id"], ("finished",))
+
+
+def test_playlist_sync_downloads_new_songs_and_lists_removed_ones(
+    client: TestClient, services: FakeServices
+) -> None:
+    download_playlist(client, services, [1, 2, 3])
+    [saved] = client.get("/api/library").json()["playlists"]
+    assert saved["playlist_id"] == PLAYLIST_ID and saved["removed"] == 0 and not saved["csv"]
+
+    services.metadata.tracks = [make_track(1), make_track(4)]  # 2 and 3 left, 4 is new
+    synced = client.post(SYNC, json={"id": PLAYLIST_ID})
+    assert synced.status_code == 202
+    body = synced.json()
+    assert body["new"] == 1 and body["complete"] and body["name"] == "Fake Playlist"
+    assert [(g["title"], g["state"]) for g in body["gone"]] == [
+        ("Song 2", "file"),
+        ("Song 3", "file"),
+    ]
+    assert all(Path(g["path"]).is_file() for g in body["gone"])
+    job = wait_for(client, body["job"]["id"], ("finished",))
+    assert job["counts"]["done"] == 1 and job["counts"]["skipped"] == 1
+    library = client.get("/api/library").json()
+    assert len(library["tracks"]) == 4 and all(t["exists"] for t in library["tracks"])
+    assert library["playlists"][0]["removed"] == 2 and library["playlists"][0]["tracks"] == 2
+    listed = client.get(REMOVED, params={"id": PLAYLIST_ID}).json()
+    assert listed["gone"] == body["gone"] and listed["name"] == "Fake Playlist"
+
+    # nothing is deleted without the confirm flag, or without naming the songs
+    keys = [g["key"] for g in body["gone"]]
+    paths = [Path(g["path"]) for g in body["gone"]]
+    assert (
+        client.post(f"{REMOVED}/delete", json={"id": PLAYLIST_ID, "keys": keys}).status_code == 400
+    )
+    unnamed = client.post(f"{REMOVED}/delete", json={"id": PLAYLIST_ID, "confirm": True})
+    assert unnamed.status_code == 400 and all(p.is_file() for p in paths)
+
+    deleted = client.post(
+        f"{REMOVED}/delete", json={"id": PLAYLIST_ID, "keys": keys[:1], "confirm": True}
+    ).json()
+    assert deleted["deleted"] == [str(paths[0])] and deleted["failed"] == []
+    assert not paths[0].exists() and paths[1].is_file()
+    assert [g["key"] for g in deleted["gone"]] == keys[1:]
+
+    assert client.post(f"{REMOVED}/keep", json={"id": PLAYLIST_ID}).json() == {"gone": []}
+    assert paths[1].is_file()  # kept, and no longer listed
+    after = client.get("/api/library").json()
+    assert after["playlists"][0]["removed"] == 0 and len(after["tracks"]) == 3
+
+    for url in (SYNC, f"{REMOVED}/keep", f"{REMOVED}/delete"):
+        assert client.post(url, json={"id": "nope", "confirm": True}).status_code == 404
+    assert client.get(REMOVED, params={"id": "nope"}).status_code == 404
+
+
+def test_playlist_sync_ignores_a_partial_listing(
+    client: TestClient, services: FakeServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    download_playlist(client, services, [1, 2, 3])
+
+    def first_only(playlist_id: str) -> Collection:
+        return Collection(
+            kind="playlist", id=playlist_id, name="Fake Playlist", tracks=[make_track(1)], total=3
+        )
+
+    monkeypatch.setattr(services.metadata, "get_playlist", first_only)
+    body = client.post(SYNC, json={"id": PLAYLIST_ID}).json()
+    assert not body["complete"] and (body["listed"], body["total"]) == (1, 3)
+    assert body["gone"] == []  # songs 2 and 3 are not "removed": they just weren't listed
+    wait_for(client, body["job"]["id"], ("finished",))
+    assert client.get("/api/library").json()["playlists"][0]["removed"] == 0
+
+
+def test_playlist_sync_waits_for_a_running_download(
+    client: TestClient, services: FakeServices
+) -> None:
+    download_playlist(client, services, [1])
+    services.metadata.tracks = [make_track(1), make_track(2)]
+    services.downloader.block = threading.Event()
+    first = client.post(SYNC, json={"id": PLAYLIST_ID})
+    assert first.status_code == 202
+    second = client.post(SYNC, json={"id": PLAYLIST_ID})
+    assert second.status_code == 409 and "already" in second.json()["detail"]
+    services.downloader.block.set()
+    wait_for(client, first.json()["job"]["id"], ("finished",))
+
+
+def test_csv_playlist_sync_asks_for_the_new_file(client: TestClient) -> None:
+    head = "Track Name,Artist Name(s),Track Duration (ms)\n"
+    first = head + "Song One,Fake Artist,200000\nSong Two,Fake Artist,200000\n"
+    created = client.post("/api/jobs", json={"csv_text": first, "name": "My Mix"})
+    wait_for(client, created.json()["id"], ("finished",))
+    [saved] = client.get("/api/library").json()["playlists"]
+    assert saved["csv"] and saved["playlist_id"] == "csv:my-mix"
+
+    missing = client.post(SYNC, json={"id": "csv:my-mix"})
+    assert missing.status_code == 400 and "CSV" in missing.json()["detail"]
+    empty = client.post(SYNC, json={"id": "csv:my-mix", "csv_text": "nothing,useful\n1,2\n"})
+    assert empty.status_code == 400
+
+    second = head + "Song One,Fake Artist,200000\nSong Three,Fake Artist,200000\n"
+    body = client.post(SYNC, json={"id": "csv:my-mix", "csv_text": second}).json()
+    assert body["new"] == 1 and body["name"] == "My Mix"
+    assert [(g["title"], g["state"]) for g in body["gone"]] == [("Song Two", "file")]
+    job = wait_for(client, body["job"]["id"], ("finished",))
+    assert job["counts"]["done"] == 1 and job["counts"]["skipped"] == 1
+    assert len(client.get("/api/library").json()["tracks"]) == 3  # nothing deleted

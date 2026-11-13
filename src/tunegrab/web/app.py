@@ -37,11 +37,13 @@ from tunegrab.config import (
 from tunegrab.doctor import Status, check_output_dir, run_all, update_ytdlp
 from tunegrab.download.ytdlp import DownloadError
 from tunegrab.errors import TuneGrabError
+from tunegrab.imports import CsvImportError, collection_from_csv
+from tunegrab.library import sync as playlist_sync
 from tunegrab.library.archive import DownloadRecord
 from tunegrab.library.paths import TemplateError, validate_template
 from tunegrab.matching.base import SearchError
 from tunegrab.metadata.base import MetadataError, NotFoundError
-from tunegrab.models import Candidate, Job, TaskStatus, Track
+from tunegrab.models import Candidate, Collection, Job, TaskStatus, Track, TrackTask
 from tunegrab.net import NetworkError
 from tunegrab.runner import unexpected_message as unexpected_error
 from tunegrab.services import Services, build_services
@@ -156,6 +158,35 @@ class ReviewRequest(BaseModel):
 
     key: str = Field(min_length=1, max_length=2000)
     video_id: str | None = Field(default=None, max_length=64)
+
+
+class PlaylistRequest(BaseModel):
+    """A playlist TuneGrab has downloaded before (its ID in the download history)."""
+
+    id: str = Field(min_length=1, max_length=400)
+    # a CSV playlist is checked against a new export of it
+    csv_text: str | None = Field(default=None, max_length=20_000_000)
+    # deleting files: the songs to delete, and the user's explicit go-ahead
+    keys: list[str] = Field(default_factory=list, max_length=20_000)
+    confirm: bool = False
+
+
+def gone_payload(services: Services, playlist_id: str) -> list[dict[str, Any]]:
+    """Songs that left a playlist and are waiting for the user's decision."""
+    archive = services.archive
+    listed = playlist_sync.describe(
+        archive, playlist_id, playlist_sync.pending(archive, playlist_id)
+    )
+    return [
+        {
+            "key": item.track.key,
+            "title": item.track.title,
+            "artists": item.track.artists,
+            "state": item.state,
+            "path": str(item.path) if item.path else None,
+        }
+        for item in listed
+    ]
 
 
 def library_review(services: Services, record: DownloadRecord) -> dict[str, Any] | None:
@@ -597,7 +628,17 @@ def create_app(
                 }
                 for r in records
             ],
-            "playlists": services.archive.playlists(),
+            "playlists": [
+                {
+                    **p,
+                    "csv": p["playlist_id"].startswith("csv:"),
+                    # songs that left it and still have a file here
+                    "removed": sum(
+                        g["state"] == "file" for g in gone_payload(services, p["playlist_id"])
+                    ),
+                }
+                for p in services.archive.playlists()
+            ],
             "videos": [
                 {
                     "key": v.key,
@@ -616,6 +657,98 @@ def create_app(
                 for v in services.archive.all_videos()
             ],
         }
+
+    def _playlist(playlist_id: str) -> str:
+        name = services.archive.playlist_name(playlist_id)
+        if name is None:
+            raise HTTPException(404, "TuneGrab has no record of that playlist any more.")
+        return name
+
+    def _fetch_playlist(playlist_id: str, name: str, csv_text: str | None) -> Collection:
+        """The playlist as it is now (Spotify, or the CSV export the user just chose)."""
+        if playlist_id.startswith("csv:"):
+            return collection_from_csv(
+                csv_text or "",
+                name,
+                lookup=lambda tid: services.resolver.resolve_ref(SpotifyRef("track", tid)).tracks[
+                    0
+                ],
+            )
+        if playlist_id == "liked":
+            return services.resolver.resolve_ref(SpotifyRef("liked", ""))
+        return services.resolver.resolve_ref(SpotifyRef("playlist", playlist_id))
+
+    @app.post("/api/playlists/sync", status_code=202)
+    async def sync_playlist(body: PlaylistRequest) -> dict[str, Any]:
+        """Check a saved playlist for changes: download what's new, list what left.
+        Nothing is deleted here."""
+        name = _playlist(body.id)
+        if body.id.startswith("csv:") and not (body.csv_text and body.csv_text.strip()):
+            raise HTTPException(400, "Choose the playlist's new CSV file.")
+        if any(
+            j.collection is not None
+            and j.collection.id == body.id
+            and not (j.finished_at or j.error)
+            for j in manager.jobs.values()
+        ):
+            raise HTTPException(409, "This playlist is already being downloaded. See Downloads.")
+        archive = services.archive
+        before = playlist_sync.remembered(archive, body.id)  # before the job re-saves it
+        known = {track.key for _, track in archive.playlist_members(body.id)}
+        try:
+            collection = await asyncio.to_thread(_fetch_playlist, body.id, name, body.csv_text)
+        except CsvImportError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except (InvalidURLError, MetadataError) as exc:
+            raise _browse_error(exc) from exc
+        collection.id = body.id
+        complete = playlist_sync.is_complete(collection)
+        playlist_sync.note_departures(archive, body.id, before, collection)
+        tasks = [TrackTask(track=t, position=i) for i, t in enumerate(collection.tracks, start=1)]
+        built = Job(input=collection.name, collection=collection, tasks=tasks)
+        job = await manager.submit(JobRequest(name=collection.name), built)
+        return {
+            "job": job_summary(job),
+            "name": collection.name,
+            "new": len({t.key for t in collection.tracks} - known),
+            # False: only part of the playlist could be read, so departures are unknown
+            "complete": complete,
+            "listed": len(collection.tracks),
+            "total": collection.total,
+            "gone": gone_payload(services, body.id),
+        }
+
+    @app.get("/api/playlists/removed")
+    def playlist_removed(id: str) -> dict[str, Any]:
+        return {"id": id, "name": _playlist(id), "gone": gone_payload(services, id)}
+
+    @app.post("/api/playlists/removed/delete")
+    async def playlist_delete_removed(body: PlaylistRequest) -> dict[str, Any]:
+        """Delete the files of songs that left a playlist. Only the named songs, only with
+        ``confirm`` (the page shows every file first), never one another playlist has."""
+        _playlist(body.id)
+        if not body.confirm or not body.keys:
+            raise HTTPException(400, "Nothing was deleted: choose the files and confirm first.")
+        result = await asyncio.to_thread(
+            playlist_sync.remove_files, services.archive, body.id, set(body.keys)
+        )
+        if result.deleted and services.settings.playlist_mode == "m3u":
+            try:
+                services.pipeline().write_playlist_file(body.id)
+            except OSError as exc:
+                log.warning("could not rewrite the playlist file of %s: %s", body.id, exc)
+        return {
+            "deleted": [str(item.path) for item in result.deleted],
+            "failed": [{"path": str(item.path), "reason": why} for item, why in result.failed],
+            "gone": gone_payload(services, body.id),
+        }
+
+    @app.post("/api/playlists/removed/keep")
+    def playlist_keep_removed(body: PlaylistRequest) -> dict[str, Any]:
+        """Keep the files of the songs that left; stop listing them."""
+        _playlist(body.id)
+        playlist_sync.keep_files(services.archive, body.id)
+        return {"gone": []}
 
     @app.get("/api/settings")
     def get_settings() -> dict[str, Any]:

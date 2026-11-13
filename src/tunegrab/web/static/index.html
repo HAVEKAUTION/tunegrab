@@ -94,6 +94,7 @@
             <button class="btn" id="lib-open"><svg class="i"><use href="#i-folder"/></svg>Open folder</button></div></div>
         <label class="search" style="display:block;max-width:420px"><span class="sr">Filter library</span><svg class="i lg"><use href="#i-search"/></svg>
           <input id="lib-filter" class="input" type="search" placeholder="Filter by title, artist or album"></label>
+        <input type="file" id="sync-file" accept=".csv,text/csv" hidden>
         <div id="playlists"></div>
         <div id="videos"></div>
         <div id="library"></div>
@@ -186,6 +187,7 @@
     <tr><td><kbd>Esc</kbd></td><td>Close a panel</td></tr>
     <tr><td><kbd>?</kbd></td><td>Show this list</td></tr></tbody></table></div>
 </dialog>
+<dialog id="removed-dialog" class="modal wide" aria-labelledby="removed-title"></dialog>
 <dialog id="fix-dialog" class="modal" aria-labelledby="fix-title">
   <form id="fix-form" novalidate>
     <div class="d-head"><h3 id="fix-title">Use a YouTube link</h3><button type="button" class="btn ghost icon" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>

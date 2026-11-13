@@ -987,7 +987,7 @@ function renderLibrary() {
   const missing = lib.tracks.filter((t) => !t.exists).length;
   $("#lib-meta").innerHTML = `${plural(lib.tracks.length, "song")} in <span class="mono">${esc(lib.root)}</span>${missing ? ` · <span style="color:var(--warn)">${missing} moved or deleted</span>` : ""}`;
   $("#playlists").innerHTML = lib.playlists.length && !q ? `<div class="card" style="margin-top:var(--s-6)"><h3 style="margin-bottom:var(--s-2)">Playlists</h3><table><tbody>
-    ${lib.playlists.map((p) => `<tr><td class="t-title">${esc(p.name)}</td><td class="muted tnum">${plural(p.tracks, "song")}</td><td class="c-end xs faint">Updated ${when(p.synced_at)}</td></tr>`).join("")}</tbody></table></div>` : "";
+    ${lib.playlists.map(playlistRow).join("")}</tbody></table></div>` : "";
   const videos = (lib.videos || []).filter((v) => !q || [v.title, v.uploader].some((x) => (x || "").toLowerCase().includes(q)));
   $("#videos").innerHTML = videos.length ? `<div class="card" style="margin-top:var(--s-6)"><h3 style="margin-bottom:var(--s-2)">Videos</h3><table><tbody>
     ${videos.map((v) => `<tr><td><div class="t-title">${esc(v.title)}</div><div class="t-sub">${esc(v.uploader)}</div></td>
@@ -1025,6 +1025,127 @@ function renderLibrary() {
     }).join("")}</section>`;
   }).join("");
 }
+// ============================================================== playlist sync
+// Library -> a playlist -> "Check for new songs": downloads what was added and lists
+// what left. Files of songs that left are only deleted after the dialog below, which
+// names each one and asks twice.
+const syncing = new Set(); // playlist ids being checked
+const quietJobs = new Set(); // sync jobs with nothing new: no "0 downloaded" toast
+function playlistRow(p) {
+  const id = esc(p.playlist_id), busy = syncing.has(p.playlist_id);
+  const label = busy ? "Checking…" : p.csv ? "Check a new CSV file" : "Check for new songs";
+  const hint = p.csv ? "Choose a newer export of this playlist: new songs are downloaded and ones that left are listed"
+    : "Download songs added to this playlist and list the ones that left it";
+  return `<tr><td class="t-title">${esc(p.name)}</td><td class="muted tnum">${plural(p.tracks, "song")}</td>
+    <td>${p.removed ? `<button class="btn sm ghost warn-text" data-removed="${id}">${icon("alert")}${plural(p.removed, "song")} left this playlist</button>` : ""}</td>
+    <td class="c-end xs faint">Updated ${when(p.synced_at)}</td>
+    <td class="c-end"><button class="btn sm" data-sync="${id}" ${p.csv ? "data-csv" : ""} ${busy ? "disabled" : ""} title="${hint}">${icon(busy ? "loader" : "refresh", busy ? "spin" : "")}${label}</button></td></tr>`;
+}
+const focusSync = (id) => $$("[data-sync]").find((el) => el.dataset.sync === id)?.focus();
+async function syncPlaylist(id, csvText = null) {
+  if (syncing.has(id)) return;
+  syncing.add(id); renderLibrary();
+  let res = null;
+  try {
+    res = await api("/api/playlists/sync", { method: "POST", body: JSON.stringify({ id, csv_text: csvText }) });
+    if (!res.new) quietJobs.add(res.job.id);
+    upsertJob(res.job);
+    toast(`${res.name}: ${res.new ? `${plural(res.new, "new song")} downloading` : "no new songs"}.`,
+      { action: res.new ? { label: "View", run: () => showTab("jobs") } : null });
+    if (!res.complete) toast(`Only ${res.listed} of ${res.total} songs in ${res.name} could be read, so TuneGrab can't tell which ones left it. Nothing was removed.`, { kind: "warn", timeout: 10000 });
+  } catch (err) { toast(err.message, { kind: "bad" }); }
+  syncing.delete(id);
+  await loadLibrary();
+  if (res && res.gone.some((g) => g.state === "file")) openRemoved(id, res.name, res.gone);
+  else focusSync(id);
+}
+$("#sync-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0], id = e.target.dataset.playlist;
+  e.target.value = "";
+  if (!file || !id) return;
+  if (file.size > CSV_MAX_BYTES) { toast("That file is over 20 MB. Split it into smaller lists.", { kind: "bad" }); return; }
+  let text;
+  try { text = await file.text(); }
+  catch { toast("That file couldn't be read. Choose it again.", { kind: "bad" }); return; }
+  syncPlaylist(id, text);
+});
+
+// Songs that left a playlist. Step 1 lists them (tick which files to delete); step 2
+// names every file again before anything is deleted.
+let removed = null; // { id, name, gone, step, picked: Set of song keys, busy, failed }
+const removedFiles = () => removed.gone.filter((g) => g.state === "file");
+const removedPicked = () => removedFiles().filter((g) => removed.picked.has(g.key));
+async function showRemoved(id) {
+  try { const r = await api(`/api/playlists/removed?id=${encodeURIComponent(id)}`); openRemoved(id, r.name, r.gone); }
+  catch (err) { toast(err.message, { kind: "bad" }); }
+}
+function openRemoved(id, name, gone) {
+  removed = { id, name, gone, step: "list", busy: false, failed: [],
+    picked: new Set(gone.filter((g) => g.state === "file").map((g) => g.key)) };
+  renderRemoved();
+  const d = $("#removed-dialog");
+  if (!d.open) d.showModal();
+}
+function renderRemoved() {
+  const r = removed, d = $("#removed-dialog");
+  const picked = removedPicked();
+  const song = (g) => `<span class="t-title">${esc(g.title)}</span> <span class="t-sub">${esc(g.artists.join(", "))}</span>`;
+  const head = (title) => `<div class="d-head"><h3 id="removed-title">${esc(title)}</h3><button class="btn ghost icon" data-close aria-label="Close">${icon("x")}</button></div>`;
+  if (r.step === "confirm") {
+    d.innerHTML = `${head(`Delete ${plural(picked.length, "file")}?`)}
+      <div class="d-body" style="max-height:60vh"><p class="small">These files are deleted from your computer for good. They are not moved to the Recycle Bin or Trash.</p>
+        <ul class="file-list">${picked.map((g) => `<li><div>${song(g)}</div><div class="xs mono faint">${esc(g.path)}</div></li>`).join("")}</ul></div>
+      <div class="d-foot"><button class="btn ghost" data-back ${r.busy ? "disabled" : ""} style="margin-right:auto">Back</button>
+        <button class="btn danger armed" data-delete ${r.busy ? "disabled" : ""}>${r.busy ? icon("loader", "spin") : ""}Delete ${plural(picked.length, "file")}</button></div>`;
+    $("[data-back]", d).focus(); // the safe choice has focus, so Enter can't delete
+    return;
+  }
+  const NOTE = { shared: "Kept: another playlist has it", not_downloaded: "No file in your library" };
+  d.innerHTML = `${head(`No longer in ${r.name}`)}
+    <div class="d-body" style="max-height:60vh"><p class="small muted">${plural(r.gone.length, "song")} left this playlist. The files are still in your library; nothing is deleted unless you choose it here.</p>
+      ${r.failed.map((f) => `<p class="small error-text" role="alert">Couldn't delete ${esc(f.path)}: ${esc(f.reason)}. Close any program using it and try again.</p>`).join("")}
+      <ul class="file-list">${r.gone.map((g) => g.state === "file"
+        ? `<li><label class="check"><input type="checkbox" data-pick="${esc(g.key)}" ${r.picked.has(g.key) ? "checked" : ""}><span><span>${song(g)}</span><span class="xs mono faint">${esc(g.path)}</span></span></label></li>`
+        : `<li><div>${song(g)}</div><div class="xs faint">${NOTE[g.state] || ""}</div></li>`).join("")}</ul></div>
+    <div class="d-foot"><button class="btn ghost" data-keep-all ${r.busy ? "disabled" : ""} style="margin-right:auto">Keep all files</button>
+      <button class="btn danger" data-next ${picked.length && !r.busy ? "" : "disabled"}>Delete ${plural(picked.length, "file")}…</button></div>`;
+}
+$("#removed-dialog").addEventListener("change", (e) => {
+  const key = e.target.dataset?.pick;
+  if (!key) return;
+  if (e.target.checked) removed.picked.add(key); else removed.picked.delete(key);
+  const next = $("[data-next]", $("#removed-dialog")), n = removedPicked().length;
+  next.disabled = !n; next.textContent = `Delete ${plural(n, "file")}…`;
+});
+$("#removed-dialog").addEventListener("click", async (e) => {
+  const d = $("#removed-dialog"), r = removed;
+  if (e.target === d || e.target.closest("[data-close]")) { d.close(); return; }
+  const b = e.target.closest("button");
+  if (!b || !r || r.busy) return;
+  if (b.hasAttribute("data-next")) { r.step = "confirm"; renderRemoved(); return; }
+  if (b.hasAttribute("data-back")) { r.step = "list"; renderRemoved(); $("[data-next]", d).focus(); return; }
+  if (b.hasAttribute("data-keep-all")) {
+    r.busy = true; renderRemoved();
+    try {
+      await api("/api/playlists/removed/keep", { method: "POST", body: JSON.stringify({ id: r.id }) });
+      d.close(); toast("Kept. Those songs stay in your library."); loadLibrary();
+    } catch (err) { r.busy = false; renderRemoved(); toast(err.message, { kind: "bad" }); }
+    return;
+  }
+  if (b.hasAttribute("data-delete")) {
+    r.busy = true; renderRemoved();
+    try {
+      const res = await api("/api/playlists/removed/delete", { method: "POST", body: JSON.stringify({ id: r.id, keys: removedPicked().map((g) => g.key), confirm: true }) });
+      Object.assign(r, { gone: res.gone, failed: res.failed, step: "list", busy: false });
+      r.picked = new Set(removedFiles().map((g) => g.key));
+      if (res.deleted.length) toast(`Deleted ${plural(res.deleted.length, "file")}.`);
+      if (removedFiles().length) renderRemoved(); else d.close();
+      loadLibrary();
+    } catch (err) { r.busy = false; r.step = "list"; renderRemoved(); toast(err.message, { kind: "bad" }); }
+  }
+});
+$("#removed-dialog").addEventListener("close", () => { const id = removed?.id; removed = null; if (id) focusSync(id); });
+
 async function openPath(path) {
   try { await api("/api/open", { method: "POST", body: JSON.stringify({ path }) }); }
   catch (err) { toast(err.message, { kind: "bad" }); }
@@ -1033,6 +1154,12 @@ $("#tab-library").addEventListener("click", (e) => {
   const b = e.target.closest("button");
   if (!b) return;
   if (onReviewClick(b)) return;
+  if (b.dataset.sync) {
+    if (!b.hasAttribute("data-csv")) { syncPlaylist(b.dataset.sync); return; }
+    $("#sync-file").dataset.playlist = b.dataset.sync; $("#sync-file").click(); // asks for the new export
+    return;
+  }
+  if (b.dataset.removed) { showRemoved(b.dataset.removed); return; }
   if (b.dataset.show) openPath(b.dataset.show);
   if (b.hasAttribute("data-goto-get")) { showTab("get"); $("#url").focus(); }
 });
@@ -1141,7 +1268,8 @@ function connect() {
     upsertJob(job);
     if (before && ACTIVE.includes(before.state) && !ACTIVE.includes(job.state)) {
       const c = job.counts || {};
-      toast(`${job.name}: ${c.done || 0} downloaded${c.failed ? `, ${c.failed} failed` : ""}.`, { kind: c.failed ? "warn" : "ok" });
+      // a playlist check that found nothing new already said so
+      if (!(quietJobs.delete(job.id) && !c.failed && !c.done)) toast(`${job.name}: ${c.done || 0} downloaded${c.failed ? `, ${c.failed} failed` : ""}.`, { kind: c.failed ? "warn" : "ok" });
       state.library = null; loadSystem();
       if (!$("#tab-library").classList.contains("hidden")) loadLibrary();
     }

@@ -11,6 +11,10 @@ All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
   length, score and a Listen link. "Use this one" downloads that video and replaces the file
   only once the new one is tagged and ready; "Keep the saved one" stops the question. Either
   choice is remembered for the song.
+- **Playlist sync in the app.** Library → a playlist → **Check for new songs** downloads what
+  was added and lists the songs that left. Their files are deleted only after you tick them
+  and confirm a second screen naming every file; "Keep all files" dismisses the list. Songs
+  another playlist still has are never deleted. CSV playlists ask for a newer export.
 - **Search finds albums and songs.** Type an album or song ("Discovery Daft Punk", "One More
   Time") to see matching albums and songs from YouTube Music and tick them into the queue. An
   artist's name still opens the artist.
@@ -28,6 +32,10 @@ All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
   turns it off.
 
 ### Fixed
+- **`tunegrab sync --remove` could offer to delete songs that hadn't left the playlist.**
+  Without a Spotify login only the first 100 songs of a playlist can be read; the rest looked
+  "removed". When a playlist can't be read in full, sync (CLI and app) now says so and treats
+  no song as removed.
 - **The Windows installer could delete your music.** Updating (re-running the install line)
   mirrored the release over the install folder, which deleted the default music folder
   (`downloads`) and any `.env` kept there; `-Uninstall` deleted them too. The installer now

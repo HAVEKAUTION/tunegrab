@@ -31,6 +31,7 @@ PAIRS = [
     ("--warn", "--n-2", 4.5, "match review note and button"),
     ("--text-1", "--n-2", 4.5, "match review panel"),
     ("--bad", "--n-1", 4.5, "error text"),
+    ("--bad", "--n-2", 4.5, "delete button label"),
     ("--bad", "--n-3", 4.5, "error pill"),
     ("--info", "--n-1", 4.5, "links, info text"),
     ("--info", "--n-3", 4.5, "info pill"),

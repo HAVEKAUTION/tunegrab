@@ -41,6 +41,7 @@ from tunegrab.download.convert import FORMAT_HELP
 from tunegrab.download.ytdlp import BREAKAGE_HINT, DownloadError
 from tunegrab.errors import TuneGrabError
 from tunegrab.imports import CsvImportError, collection_from_csv
+from tunegrab.library import sync as playlist_sync
 from tunegrab.library.archive import DownloadRecord
 from tunegrab.library.paths import TemplateError, move_into_place, validate_template
 from tunegrab.library.playlists import playlist_file
@@ -633,12 +634,8 @@ def sync(
         if ref.kind not in ("playlist", "liked"):
             raise _fail("sync works with playlists (or Liked Songs).")
         playlist_id = ref.id or "liked"
-        before = {t.key: t for _, t in services.archive.playlist_members(playlist_id)}
-        # tracks that left on an earlier sync but weren't deleted then (no --remove)
-        pending_key = f"sync_gone:{playlist_id}"
-        for raw in services.archive.get_meta(pending_key) or []:
-            track = Track.model_validate(raw)
-            before.setdefault(track.key, track)
+        # includes tracks that left on an earlier sync but weren't deleted then (no --remove)
+        before = playlist_sync.remembered(services.archive, playlist_id)
         try:
             with console.status("Fetching playlist ..."):
                 collection = services.resolver.resolve_ref(ref)
@@ -652,46 +649,38 @@ def sync(
             tasks=[TrackTask(track=t, position=i) for i, t in enumerate(collection.tracks, 1)],
         )
         jobs = run_jobs(services, [(collection.name, job)])
-        current = {t.key for t in collection.tracks}
-        gone = [t for key, t in before.items() if key not in current]
-        services.archive.set_meta(pending_key, [t.model_dump(mode="json") for t in gone] or None)
+        if not playlist_sync.is_complete(collection):
+            console.print(
+                f"[yellow]Only {len(collection.tracks)} of {collection.total} tracks could be "
+                "read, so TuneGrab can't tell which ones left the playlist.[/] Nothing was "
+                "removed. Log in (tunegrab login) to read the whole playlist."
+            )
+            raise typer.Exit(_exit_code(jobs))
+        gone = playlist_sync.note_departures(services.archive, playlist_id, before, collection)
         if not gone:
             console.print("No tracks have left the playlist.")
             raise typer.Exit(_exit_code(jobs))
         console.print(f"[yellow]{len(gone)} track(s) are no longer in the playlist:[/]")
-        keep_keys = services.archive.keys_in_other_playlists(playlist_id)
-        deletable: list[tuple[Path, str]] = []
-        for track in gone:
-            record = services.archive.get_download(track.key)
-            if record is None or not record.exists:
-                console.print(f"  {escape(track.display)} [dim](not downloaded)[/]")
-                continue
-            if track.key in keep_keys:
-                console.print(f"  {escape(track.display)} [dim](kept: in another playlist)[/]")
-                continue
-            console.print(f"  {escape(track.display)} -> {escape(str(record.path))}")
-            deletable.append((record.path, track.key))
+        deletable = 0
+        for item in playlist_sync.describe(services.archive, playlist_id, gone):
+            name = escape(item.track.display)
+            if item.state == "not_downloaded":
+                console.print(f"  {name} [dim](not downloaded)[/]")
+            elif item.state == "shared":
+                console.print(f"  {name} [dim](kept: in another playlist)[/]")
+            else:
+                console.print(f"  {name} -> {escape(str(item.path))}")
+                deletable += 1
         if not remove:
             if deletable:
                 console.print("Re-run with [bold]--remove[/] to delete these files.")
             raise typer.Exit(_exit_code(jobs))
-        if deletable and (yes or typer.confirm(f"Delete {len(deletable)} file(s)?", default=False)):
-            deleted: set[str] = set()
-            for path, key in deletable:
-                try:
-                    path.unlink(missing_ok=True)
-                    path.with_suffix(".lrc").unlink(missing_ok=True)
-                except OSError as exc:
-                    console.print(
-                        f"[red]Couldn't delete[/] {escape(str(path))}: {exc.strerror or exc}"
-                    )
-                    continue
-                services.archive.forget_download(key)
-                deleted.add(key)
-            left = [t.model_dump(mode="json") for t in gone if t.key not in deleted]
-            services.archive.set_meta(pending_key, left or None)
-            console.print(f"Deleted {len(deleted)} of {len(deletable)} file(s).")
-            if len(deleted) < len(deletable):
+        if deletable and (yes or typer.confirm(f"Delete {deletable} file(s)?", default=False)):
+            result = playlist_sync.remove_files(services.archive, playlist_id)
+            for item, why in result.failed:
+                console.print(f"[red]Couldn't delete[/] {escape(str(item.path))}: {why}")
+            console.print(f"Deleted {len(result.deleted)} of {deletable} file(s).")
+            if result.failed:
                 console.print("Close any program using the others and run sync again.")
                 raise typer.Exit(1)
             if settings.playlist_mode == "m3u":
