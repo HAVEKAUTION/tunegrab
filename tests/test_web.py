@@ -1042,20 +1042,28 @@ def test_selected_songs_are_looked_up_in_parallel(
     tracks = [make_track(i) for i in range(1, 13)]
     services.metadata.tracks = tracks
     original = services.metadata.get_track
+    lock = threading.Lock()
+    running = peak = 0
 
     def slow(track_id: str) -> Track:
-        time.sleep(0.2)
+        nonlocal running, peak
+        with lock:
+            running += 1
+            peak = max(peak, running)
+        time.sleep(0.2)  # long enough for the other lookups to start meanwhile
+        with lock:
+            running -= 1
         return original(track_id)
 
     monkeypatch.setattr(services.metadata, "get_track", slow)
     ids = [t.spotify_id for t in tracks] + ["0000000000000000000000"]  # one that doesn't exist
-    started = time.monotonic()
     job = wait_for(
         client,
         client.post("/api/jobs", json={"spotify_tracks": ids, "name": "Picks"}).json()["id"],
         ("finished",),
     )
-    assert time.monotonic() - started < 1.5  # 12 x 0.2 s one by one would be 2.4 s
+    # Count overlapping lookups rather than timing them: slow CI machines made a time limit flaky.
+    assert peak > 1
     assert [t["title"] for t in job["tasks"]] == [t.title for t in tracks]  # order kept
     assert job["warnings"] == ["1 of the selected songs couldn't be found."]
 
