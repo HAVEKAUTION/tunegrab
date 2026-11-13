@@ -13,21 +13,21 @@
 
 <img src="https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/docs/images/demo.gif" alt="Typing an artist into TuneGrab, ticking two albums into the queue, then pasting a YouTube link to download a clip" width="900">
 
-**[Get started](#-get-started)** · **[How to use it](#-how-to-use-it)** · **[Jellyfin / Plex](#-use-with-jellyfin-navidrome-or-plex)** · **[FAQ](#-faq)** · **[Troubleshooting](#-troubleshooting)** · **[Advanced](#-advanced)**
+**[Get started](#get-started)** · **[How to use it](#how-to-use-it)** · **[Jellyfin / Plex](#use-with-jellyfin-navidrome-or-plex)** · **[FAQ](#faq)** · **[Troubleshooting](#troubleshooting)** · **[Advanced](#advanced)**
 
 </div>
 
-## ✨ What it does
+## What it does
 
-- 🔎 **Browse, then download.** Type an artist or paste a Spotify link, tick the albums or songs you want.
-- 🏷️ **Tagged files, sorted for you.** `Artist/Album (Year)/01 - Title.m4a`, with cover art and lyrics.
-- 🎯 **Picks the right version.** Skips live, cover and sped-up uploads, and flags any match it wasn't sure about so you can check it.
-- ♻️ **Never twice.** It remembers what you have; re-running a playlist only fetches what's new.
-- 🎬 **Videos too.** Paste a YouTube link to save the video, a clip of it, or just the audio.
-- 🔒 **Yours only.** Runs on your computer, no account needed. Spotify is only read for track
+- **Browse, then download.** Type an artist or paste a Spotify link, tick the albums or songs you want.
+- **Tagged files, sorted for you.** `Artist/Album (Year)/01 - Title.m4a`, with cover art and lyrics.
+- **Picks the right version.** Skips live, cover and sped-up uploads, and flags any match it wasn't sure about so you can check it.
+- **Never twice.** It remembers what you have; re-running a playlist only fetches what's new.
+- **Videos too.** Paste a YouTube link to save the video, a clip of it, or just the audio.
+- **Yours only.** Runs on your computer, no account needed. Spotify is only read for track
   details; the audio comes from YouTube.
 
-## 🚀 Get started
+## Get started
 
 **Windows:** open PowerShell and paste:
 
@@ -47,12 +47,12 @@ tunegrab serve            # opens http://127.0.0.1:8765 in your browser
 
 Then: **type an artist → tick what you want → Download.** That's it.
 
-## 🧭 How to use it
+## How to use it
 
 <img src="https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/docs/images/get-music.jpg" alt="The Get music start screen with a search box and example artists" width="900">
 
 <details>
-<summary>🎤 <b>Download albums from an artist</b></summary>
+<summary><b>Download albums from an artist</b></summary>
 
 <br>
 
@@ -68,7 +68,7 @@ Then: **type an artist → tick what you want → Download.** That's it.
 </details>
 
 <details>
-<summary>🔗 <b>Download a playlist, album or single song</b></summary>
+<summary><b>Download a playlist, album or single song</b></summary>
 
 <br>
 
@@ -82,7 +82,7 @@ downloads only what was added.
 </details>
 
 <details>
-<summary>❤️ <b>Download your Liked Songs (or any playlist) from a CSV</b></summary>
+<summary><b>Download your Liked Songs (or any playlist) from a CSV</b></summary>
 
 <br>
 
@@ -97,7 +97,7 @@ and so does a single **Track URI** column of Spotify links.
 </details>
 
 <details>
-<summary>🎬 <b>Download a video, a clip of one, or just its audio</b></summary>
+<summary><b>Download a video, a clip of one, or just its audio</b></summary>
 
 <br>
 
@@ -115,7 +115,7 @@ and so does a single **Track URI** column of Spotify links.
 </details>
 
 <details>
-<summary>🩹 <b>Fix failed or wrong songs</b></summary>
+<summary><b>Fix failed or wrong songs</b></summary>
 
 <br>
 
@@ -131,7 +131,7 @@ and so does a single **Track URI** column of Spotify links.
 </details>
 
 <details>
-<summary>📁 <b>Change where music is saved, the format, or file names</b></summary>
+<summary><b>Change where music is saved, the format, or file names</b></summary>
 
 <br>
 
@@ -145,7 +145,7 @@ format, quality, lyrics and how many songs download at once are on the same scre
 </details>
 
 <details>
-<summary>📚 <b>Your library</b></summary>
+<summary><b>Your library</b></summary>
 
 <br>
 
@@ -163,7 +163,7 @@ format, quality, lyrics and how many songs download at once are on the same scre
 </details>
 
 <details>
-<summary>⌨️ <b>Keyboard shortcuts</b></summary>
+<summary><b>Keyboard shortcuts</b></summary>
 
 <br>
 
@@ -178,7 +178,7 @@ format, quality, lyrics and how many songs download at once are on the same scre
 
 </details>
 
-## 📺 Use with Jellyfin, Navidrome or Plex
+## Use with Jellyfin, Navidrome or Plex
 
 TuneGrab's music folder is already laid out the way media servers expect, so there's nothing
 to convert: **add TuneGrab's music folder as a music library** in your server and scan it.
@@ -205,20 +205,20 @@ volumes:
 Lidarr users can add the same folder as a root folder; Lidarr recognises most albums from
 the tags.
 
-## ❓ FAQ
+## FAQ
 
 <details>
-<summary>💳 <b>Do I need a Spotify account or Premium?</b></summary>
+<summary><b>Do I need a Spotify account or Premium?</b></summary>
 
 <br>
 
 No. Public links and artist names work with no account. Premium is only needed if you
-want to create your own Spotify developer app (see [Advanced](#-advanced)).
+want to create your own Spotify developer app (see [Advanced](#advanced)).
 
 </details>
 
 <details>
-<summary>❤️ <b>Can I download my Liked Songs?</b></summary>
+<summary><b>Can I download my Liked Songs?</b></summary>
 
 <br>
 
@@ -229,7 +229,7 @@ your Spotify login.
 </details>
 
 <details>
-<summary>🎧 <b>What audio quality do I get?</b></summary>
+<summary><b>What audio quality do I get?</b></summary>
 
 <br>
 
@@ -246,7 +246,7 @@ offers a low-quality one, and flags any song that had to settle for it.
 </details>
 
 <details>
-<summary>📺 <b>What video quality do I get?</b></summary>
+<summary><b>What video quality do I get?</b></summary>
 
 <br>
 
@@ -256,7 +256,7 @@ plays anywhere. Above 1080p YouTube only offers VP9/AV1. AI-upscaled copies are 
 </details>
 
 <details>
-<summary>🎯 <b>How does it pick the right song on YouTube?</b></summary>
+<summary><b>How does it pick the right song on YouTube?</b></summary>
 
 <br>
 
@@ -273,7 +273,7 @@ plays anywhere. Above 1080p YouTube only offers VP9/AV1. AI-upscaled copies are 
 </details>
 
 <details>
-<summary>♻️ <b>Will it download the same song twice?</b></summary>
+<summary><b>Will it download the same song twice?</b></summary>
 
 <br>
 
@@ -283,7 +283,7 @@ skipped. Re-running a big job only fetches what's missing, so it's safe to stop 
 </details>
 
 <details>
-<summary>🪟 <b>Can I close the browser tab?</b></summary>
+<summary><b>Can I close the browser tab?</b></summary>
 
 <br>
 
@@ -294,7 +294,7 @@ kept too, even across a restart.
 </details>
 
 <details>
-<summary>🔒 <b>What data leaves my computer?</b></summary>
+<summary><b>What data leaves my computer?</b></summary>
 
 <br>
 
@@ -315,7 +315,7 @@ refuses a download whose checksum doesn't match.
 </details>
 
 <details>
-<summary>⚖️ <b>Is this legal?</b></summary>
+<summary><b>Is this legal?</b></summary>
 
 <br>
 
@@ -328,7 +328,7 @@ allowed to. TuneGrab deliberately **does not** decrypt Spotify audio.
 </details>
 
 <details>
-<summary>🧩 <b>Isn't there already a tool like this?</b></summary>
+<summary><b>Isn't there already a tool like this?</b></summary>
 
 <br>
 
@@ -338,10 +338,10 @@ discography across several artists in one go.
 
 </details>
 
-## 🧰 Troubleshooting
+## Troubleshooting
 
 <details>
-<summary>💥 <b>YouTube downloads suddenly all fail</b></summary>
+<summary><b>YouTube downloads suddenly all fail</b></summary>
 
 <br>
 
@@ -354,7 +354,7 @@ Also check Deno is installed (`deno --version`).
 </details>
 
 <details>
-<summary>🤖 <b>"Sign in to confirm you're not a bot"</b></summary>
+<summary><b>"Sign in to confirm you're not a bot"</b></summary>
 
 <br>
 
@@ -374,7 +374,7 @@ The same setting lets you download age-restricted videos.
 </details>
 
 <details>
-<summary>🎯 <b>A song matched the wrong version</b></summary>
+<summary><b>A song matched the wrong version</b></summary>
 
 <br>
 
@@ -389,17 +389,17 @@ tunegrab fix <spotify-track-link> <youtube-link>    # force the right one
 </details>
 
 <details>
-<summary>💯 <b>A playlist stops at 100 songs</b></summary>
+<summary><b>A playlist stops at 100 songs</b></summary>
 
 <br>
 
 That's the limit of Spotify's public pages. Either export the playlist as a CSV (see
-**How to use it**) or add Spotify developer credentials (see [Advanced](#-advanced)).
+**How to use it**) or add Spotify developer credentials (see [Advanced](#advanced)).
 
 </details>
 
 <details>
-<summary>🚪 <b>The launcher closes straight away or says "uv" is missing</b></summary>
+<summary><b>The launcher closes straight away or says "uv" is missing</b></summary>
 
 <br>
 
@@ -411,7 +411,7 @@ closing it stops TuneGrab.
 </details>
 
 <details>
-<summary>🔌 <b>"Port 8765 is already used by another program"</b></summary>
+<summary><b>"Port 8765 is already used by another program"</b></summary>
 
 <br>
 
@@ -420,7 +420,7 @@ Something else is using that port. Start on another one: `tunegrab serve --port 
 </details>
 
 <details>
-<summary>📝 <b>Where are the logs?</b></summary>
+<summary><b>Where are the logs?</b></summary>
 
 <br>
 
@@ -432,13 +432,13 @@ also see details in the terminal. Check everything is installed with **Settings 
 
 ---
 
-## 🤓 Advanced
+## Advanced
 
-The nerdy bits: command line, config, installing by hand and working on the code.
+Command line, config, installing by hand and working on the code.
 Commands below assume `tunegrab` is on your PATH; in a clone, put `uv run` in front.
 
 <details>
-<summary>⚙️ <b>How it works</b></summary>
+<summary><b>How it works</b></summary>
 
 <br>
 
@@ -466,7 +466,7 @@ the queue instead of failing it.
 </details>
 
 <details>
-<summary>💻 <b>Command line</b></summary>
+<summary><b>Command line</b></summary>
 
 <br>
 
@@ -507,7 +507,7 @@ Global flags: `--version`, `-v/--verbose` (logs always go to a rotating file too
 </details>
 
 <details>
-<summary>🎛️ <b>Settings and file naming</b></summary>
+<summary><b>Settings and file naming</b></summary>
 
 <br>
 
@@ -538,7 +538,7 @@ Available fields: `{title} {artist} {artists} {album} {album_artist} {year} {dat
 </details>
 
 <details>
-<summary>🔑 <b>Spotify developer credentials (optional)</b></summary>
+<summary><b>Spotify developer credentials (optional)</b></summary>
 
 <br>
 
@@ -563,7 +563,7 @@ to run it in. Full walkthrough: [`docs/SETUP.md`](https://github.com/HAVEKAUTION
 </details>
 
 <details>
-<summary>📦 <b>Other ways to install</b></summary>
+<summary><b>Other ways to install</b></summary>
 
 <br>
 
@@ -611,7 +611,7 @@ what to fix.
 </details>
 
 <details>
-<summary>🔄 <b>Updating</b></summary>
+<summary><b>Updating</b></summary>
 
 <br>
 
@@ -629,7 +629,7 @@ or yt-dlp is out (checked once a day; **Settings → Updates** turns it off).
 </details>
 
 <details>
-<summary>🧹 <b>Disk space and uninstalling</b></summary>
+<summary><b>Disk space and uninstalling</b></summary>
 
 <br>
 
@@ -653,7 +653,7 @@ those too if you want them gone. Your music folder is never touched.
 </details>
 
 <details>
-<summary>🛠️ <b>For developers</b></summary>
+<summary><b>For developers</b></summary>
 
 <br>
 
