@@ -83,7 +83,8 @@ def test_values_with_slashes_stay_in_one_segment(tmp_path: Path) -> None:
 
 
 def test_long_paths_shrink_folders_before_title(tmp_path: Path) -> None:
-    root = tmp_path / ("r" * 100)
+    # about 140 characters of root on every OS (macOS temp folders are long)
+    root = tmp_path / ("r" * max(10, 140 - len(str(tmp_path))))
     track = make_track(2, album="A" * 150, title="Endpoints")
     path = render_path(DEFAULT_TRACK_TEMPLATE, template_fields(track, "mp3"), root)
     assert len(str(path)) <= MAX_PATH_CHARS

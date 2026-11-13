@@ -141,8 +141,10 @@ def test_images(jpeg_bytes: bytes, tmp_path: Path) -> None:
             "1",
             str(webp),
         ],
-        check=True,
+        check=False,
     )
+    if not webp.exists():
+        pytest.skip("this ffmpeg build can't write WebP")
     converted = to_embeddable_image(webp.read_bytes())
     assert converted is not None and converted[1] == "image/jpeg"
     assert to_embeddable_image(b"garbage") is None

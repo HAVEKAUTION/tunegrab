@@ -450,7 +450,8 @@ def test_history_from_a_newer_version_is_a_message() -> None:
     with Archive(settings.resolved_archive_path) as archive:
         archive.set_meta("schema_version", 99)
     result = invoke("status")
-    assert result.exit_code == 1 and "newer TuneGrab" in result.output
+    text = " ".join(result.output.split())  # Rich wraps long temp paths differently per OS
+    assert result.exit_code == 1 and "newer TuneGrab" in text
     assert "Traceback" not in result.output
 
 

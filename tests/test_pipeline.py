@@ -295,7 +295,8 @@ def test_repeated_rate_limits_stop_the_job_and_leave_songs_retryable(tmp_path: P
         tmp_path, tracks=[make_track(1), make_track(2)], downloader=downloader, retries=3
     )
     job = run(pipeline, ALBUM)
-    assert downloader.calls == RATE_LIMIT_GIVE_UP_AFTER  # stopped knocking
+    # stopped knocking; the other song's thread may have been mid-attempt when it gave up
+    assert RATE_LIMIT_GIVE_UP_AFTER <= downloader.calls <= RATE_LIMIT_GIVE_UP_AFTER + 1
     assert statuses(job) == [TaskStatus.FAILED, TaskStatus.FAILED]
     assert job.error == RATE_LIMIT_GAVE_UP
     assert len(archive.open_failures()) == 2

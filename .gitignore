@@ -6,6 +6,7 @@
 # Output / local data
 downloads/
 *.db
+!tests/fixtures/*.db
 *.db-journal
 *.sqlite
 *.sqlite3

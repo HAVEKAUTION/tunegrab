@@ -183,10 +183,11 @@ def test_fresh_profile_gets_m4a_and_keeps_it() -> None:
 
 
 def test_profile_with_saved_settings_keeps_mp3() -> None:
-    write_config_file({"output_dir": "D:/Music", "threads": 6})  # saved by 0.4.x
+    music = "D:/Music" if os.name == "nt" else "/srv/Music"  # an absolute path on this OS
+    write_config_file({"output_dir": music, "threads": 6})  # saved by 0.4.x
     settings = keep_earlier_defaults(Settings(_env_file=None))
     assert settings.format == "mp3"
-    assert read_config_file() == {"output_dir": "D:/Music", "threads": 6, "format": "mp3"}
+    assert read_config_file() == {"output_dir": music, "threads": 6, "format": "mp3"}
     write_config_file({**read_config_file(), "format": "m4a"})  # they switch later
     assert keep_earlier_defaults(Settings(_env_file=None)).format == "m4a"
 
