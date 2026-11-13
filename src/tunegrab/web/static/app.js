@@ -763,7 +763,7 @@ function updateJobView(v, job) {
   const pct = job.total ? Math.round(100 * finished / job.total) : 0;
   const running = ACTIVE.includes(job.state);
   v.el.setAttribute("aria-busy", String(running));
-  setHtml(v.head, `<div class="grow"><h3>${esc(job.name)}</h3><div class="small faint">${esc(job.kind || "")}${job.created_at ? ` · ${when(job.created_at)}` : ""}</div></div>
+  setHtml(v.head, `<div class="grow"><h3>${esc(job.name)}</h3><div class="small faint">${esc([job.kind, job.created_at && when(job.created_at)].filter(Boolean).join(" · "))}</div></div>
       <div class="row">${jobPill(job.state, running)}
         ${running ? `<button class="btn sm" data-cancel="${job.id}">${icon("stop")}Cancel</button>` : ""}
         ${!running && job.retryable && job.taskIds ? `<button class="btn sm" data-retry="${job.id}">${icon("refresh")}Retry ${job.retryable} failed</button>` : ""}</div>`);
@@ -1274,7 +1274,7 @@ function connect() {
     const job = JSON.parse(e.data), before = state.jobs.get(job.id);
     upsertJob(job);
     if (before && ACTIVE.includes(before.state) && job.state === "error") {
-      toast(`Couldn't start ${job.name}${job.error ? `: ${job.error}` : "."}`, { kind: "bad", timeout: 8000 });
+      toast(job.error ? `Couldn't start: ${job.error}` : `Couldn't start ${job.name}.`, { kind: "bad", timeout: 8000 });
     } else if (before && ACTIVE.includes(before.state) && !ACTIVE.includes(job.state)) {
       const c = job.counts || {};
       // a playlist check that found nothing new already said so
