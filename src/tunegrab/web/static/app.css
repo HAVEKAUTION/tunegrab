@@ -1,16 +1,22 @@
 /* ===================================================================== tokens
-   Every colour, size, radius, duration and layer used below comes from here. */
+   Every colour, size, radius, duration and layer used below comes from here.
+   Dark is the default; the light set further down follows the system setting. */
 :root {
+  color-scheme: dark;
   /* neutrals (graphite) */
   --n-0: #0c0d10; --n-1: #121419; --n-2: #181b21; --n-3: #1f232b; --n-4: #2a2f39; --n-5: #3a404c;
   --text-1: #eceef2; --text-2: #b2b8c4; --text-3: #8b92a1;
+  --raised: #1f232b; /* toasts, the save bar: surfaces that float over the page */
   /* accent + semantic */
-  --accent: #4ade80; --accent-strong: #22c55e; --accent-ink: #052e16;
+  --accent: #4ade80; --accent-strong: #22c55e; --accent-hover: #4ade80; --accent-ink: #052e16;
   --accent-soft: rgba(74, 222, 128, .12); --accent-line: rgba(74, 222, 128, .55);
   --ok: #4ade80; --warn: #fbbf24; --warn-soft: rgba(251, 191, 36, .12); --warn-line: rgba(251, 191, 36, .5);
-  --bad: #f87171; --bad-soft: rgba(248, 113, 113, .12); --info: #7cb4ff;
+  --warn-ink: #291a00; --bad: #f87171; --bad-soft: rgba(248, 113, 113, .12); --info: #7cb4ff;
   --scrim: rgba(5, 6, 8, .66); --shade: rgba(0, 0, 0, .62);
-  --focus-ring: rgba(124, 180, 255, .18); --on-image-line: rgba(255, 255, 255, .7);
+  --focus-ring: rgba(124, 180, 255, .18);
+  /* the tick drawn over cover art: the same in both themes */
+  --on-image: rgba(0, 0, 0, .62); --on-image-line: rgba(255, 255, 255, .7);
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b92a1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   /* type */
   --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "SF Pro Text", Roboto, "Helvetica Neue", sans-serif;
   --mono: "Cascadia Mono", ui-monospace, "SF Mono", Consolas, monospace;
@@ -26,6 +32,20 @@
   --z-sticky: 10; --z-dialog: 40; --z-toast: 50;
   /* layout */
   --sidebar: 216px; --content: 1180px; --cover-min: 168px;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --n-0: #f3f4f6; --n-1: #ffffff; --n-2: #f5f6f8; --n-3: #e9ebef; --n-4: #d6d9df; --n-5: #aeb4bf;
+    --text-1: #15171c; --text-2: #474d59; --text-3: #5f6673; --raised: #ffffff;
+    --accent: #127436; --accent-strong: #159a45; --accent-hover: #22c55e; --accent-ink: #03200f;
+    --accent-soft: rgba(21, 154, 69, .12); --accent-line: rgba(21, 154, 69, .6);
+    --ok: #127436; --warn: #8a5200; --warn-soft: rgba(217, 138, 0, .14); --warn-line: rgba(138, 82, 0, .5);
+    --warn-ink: #ffffff; --bad: #b91c1c; --bad-soft: rgba(185, 28, 28, .08); --info: #1a56c4;
+    --scrim: rgba(21, 23, 28, .42); --shade: rgba(21, 23, 28, .16);
+    --focus-ring: rgba(26, 86, 196, .2);
+    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235f6673' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  }
 }
 @media (prefers-reduced-motion: reduce) { :root { --t-fast: 0ms; --t-med: 0ms; } }
 
@@ -94,7 +114,7 @@ main { min-width: 0; }
 .btn:hover { background: var(--n-3); border-color: var(--n-5); }
 .btn:active { background: var(--n-4); }
 .btn.primary { background: var(--accent-strong); border-color: var(--accent-strong); color: var(--accent-ink); }
-.btn.primary:hover { background: var(--accent); border-color: var(--accent); }
+.btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn.ghost { background: none; border-color: transparent; color: var(--text-2); }
 .btn.ghost:hover { background: var(--n-3); color: var(--text-1); }
 .btn.danger:hover { border-color: var(--bad); color: var(--bad); }
@@ -114,7 +134,7 @@ main { min-width: 0; }
 .input:focus, .select:focus { outline: none; border-color: var(--info); box-shadow: 0 0 0 3px var(--focus-ring); }
 .input[aria-invalid="true"] { border-color: var(--bad); }
 .select { appearance: none; padding-right: var(--s-8);
-          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b92a1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+          background-image: var(--chevron);
           background-repeat: no-repeat; background-position: right 10px center; background-size: 16px; }
 .check { display: inline-flex; align-items: center; gap: var(--s-2); cursor: pointer; }
 input[type=checkbox] { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-strong); cursor: pointer; }
@@ -169,9 +189,9 @@ td.c-end { text-align: right; white-space: nowrap; }
 /* toasts */
 .toasts { position: fixed; right: var(--s-6); bottom: var(--s-6); z-index: var(--z-toast); display: grid; gap: var(--s-2); width: min(380px, calc(100vw - 32px)); }
 .toast { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) var(--s-4); border: var(--hair); border-radius: var(--r-md);
-         background: var(--n-3); box-shadow: 0 8px 24px var(--shade); animation: rise var(--t-med) var(--ease); }
+         background: var(--raised); box-shadow: 0 8px 24px var(--shade); animation: rise var(--t-med) var(--ease); }
 .toast .grow { flex: 1; min-width: 0; }
-.toast.ok svg { stroke: var(--ok); } .toast.bad svg { stroke: var(--bad); } .toast.warn svg { stroke: var(--warn); }
+.toast.ok > svg { stroke: var(--ok); } .toast.bad > svg { stroke: var(--bad); } .toast.warn > svg { stroke: var(--warn); }
 @keyframes rise { from { transform: translateY(6px); opacity: 0; } }
 
 /* dialogs / sheet */
@@ -220,10 +240,10 @@ dialog.modal.wide { width: min(680px, calc(100vw - 32px)); }
 .rel .art { position: relative; aspect-ratio: 1; background: var(--n-3); }
 .rel .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .rel .tick { position: absolute; top: var(--s-2); left: var(--s-2); width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
-             background: var(--shade); border: 1.5px solid var(--on-image-line); }
+             background: var(--on-image); border: 1.5px solid var(--on-image-line); }
 .rel .tick svg { width: 14px; height: 14px; stroke: transparent; stroke-width: 2.5; }
 .rel.on .tick { background: var(--accent-strong); border-color: var(--accent-strong); } .rel.on .tick svg { stroke: var(--accent-ink); }
-.rel.part .tick { background: var(--warn); border-color: var(--warn); } .rel.part .tick svg { stroke: var(--accent-ink); }
+.rel.part .tick { background: var(--warn); border-color: var(--warn); } .rel.part .tick svg { stroke: var(--warn-ink); }
 .rel .meta { padding: var(--s-2) var(--s-3) var(--s-1); }
 .rel .name { font-weight: var(--fw-medium); font-size: var(--fs-sm); line-height: 1.3; overflow: hidden; display: -webkit-box;
              -webkit-line-clamp: 2; -webkit-box-orient: vertical; min-height: 2.6em; }
@@ -279,7 +299,7 @@ tr:has(.review) > td { vertical-align: top; }
 .settings .card > p { margin-bottom: var(--s-4); }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--s-4); }
 .savebar { position: sticky; bottom: var(--s-4); display: flex; justify-content: space-between; align-items: center; gap: var(--s-3);
-           padding: var(--s-3) var(--s-4); border: var(--hair); border-radius: var(--r-md); background: var(--n-2); box-shadow: 0 8px 24px var(--shade); }
+           padding: var(--s-3) var(--s-4); border: var(--hair); border-radius: var(--r-md); background: var(--raised); box-shadow: 0 8px 24px var(--shade); }
 .checks td:first-child { width: 28px; }
 .kv { display: grid; grid-template-columns: max-content 1fr auto; gap: var(--s-2) var(--s-4); align-items: center; }
 .kv dt { color: var(--text-2); font-size: var(--fs-sm); } .kv dd { margin: 0; word-break: break-all; }

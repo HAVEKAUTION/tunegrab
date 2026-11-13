@@ -5,6 +5,8 @@ All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
 ## Unreleased
 
 ### Added
+- **Light theme.** The app follows your system's light or dark setting. Both themes are
+  checked for readable contrast (WCAG AA) on every build.
 - **Check this match.** A song TuneGrab wasn't sure about (a match score under 85, or a video
   that says "live", "remix", "cover" and the like when the song doesn't) is marked in Downloads
   and Library. Open it to see the saved video and up to three other candidates with channel,
