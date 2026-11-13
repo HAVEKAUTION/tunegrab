@@ -35,3 +35,25 @@ jobs:
           gh release create "${tag}" "tunegrab-${tag}.zip" SHA256SUMS install.ps1 \
             --title "TuneGrab ${tag#v}" --notes "${notes:-See CHANGELOG.md}" \
             $([[ "${tag}" == *-* ]] && echo --prerelease)
+
+  pypi:
+    # Trusted publishing: PyPI trusts this workflow + the "pypi" environment, so no
+    # token is stored in the repo. Set up once at pypi.org (Publishing -> add publisher).
+    needs: ci
+    if: ${{ !contains(github.ref_name, '-') }}  # pre-releases (v1.2.0-rc1) stay off PyPI
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/tunegrab/
+    permissions:
+      id-token: write  # lets PyPI verify this run
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+      - name: Build the wheel and source package
+        run: uv build
+      - name: Check the version matches the tag
+        run: |
+          ls dist
+          test -f "dist/tunegrab-${GITHUB_REF_NAME#v}-py3-none-any.whl"
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # release/v1 (v1.14.3)
