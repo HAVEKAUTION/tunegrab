@@ -2,6 +2,16 @@
 
 All notable changes to TuneGrab. Versions follow [semver](https://semver.org).
 
+## 0.6.1 — 2026-11-13
+
+### Added
+- **On PyPI.** `uv tool install tunegrab` (or `pip install tunegrab`) installs the app on
+  any system with Python 3.11+, ffmpeg and Deno; `tunegrab serve` opens it. Releases are
+  published to PyPI by the release workflow (trusted publishing, no stored token).
+
+### Changed
+- README images and links use full URLs so they also show on PyPI.
+
 ## 0.6.0 — 2026-11-13
 
 No 0.5.0 was published; its changes are part of this release.

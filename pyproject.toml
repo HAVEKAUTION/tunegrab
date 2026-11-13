@@ -1,7 +1,7 @@
 [project]
 name = "tunegrab"
-version = "0.6.0"
-description = "Personal-use local music downloader: Spotify metadata -> YouTube audio -> tagged files."
+version = "0.6.1"
+description = "Local music downloader: pick albums and playlists from Spotify, get tagged MP3/M4A files with audio from YouTube Music."
 readme = "README.md"
 authors = [
     { name = "HAVEKAUTION", email = "243785012+HAVEKAUTION@users.noreply.github.com" }
@@ -9,6 +9,19 @@ authors = [
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
+keywords = ["music", "downloader", "spotify", "youtube-music", "yt-dlp", "mp3", "tagging", "lyrics"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio",
+]
 dependencies = [
     "fastapi>=0.162.4",
     "httpx>=0.28.1",
@@ -24,6 +37,11 @@ dependencies = [
     "yt-dlp[default]>=2026.10.26",
     "ytmusicapi>=1.12.3",
 ]
+
+[project.urls]
+Homepage = "https://github.com/HAVEKAUTION/tunegrab"
+Changelog = "https://github.com/HAVEKAUTION/tunegrab/blob/main/CHANGELOG.md"
+Issues = "https://github.com/HAVEKAUTION/tunegrab/issues"
 
 [project.scripts]
 tunegrab = "tunegrab.cli:app"

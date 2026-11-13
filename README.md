@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/logo.svg" alt="" width="84">
+<img src="https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/docs/images/logo.svg" alt="" width="84">
 
 # TuneGrab
 
@@ -10,7 +10,7 @@
 ![Platforms](https://img.shields.io/badge/runs%20on-Windows%20%7C%20macOS%20%7C%20Linux-555)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 
-<img src="docs/images/demo.gif" alt="Typing an artist into TuneGrab, ticking two albums into the queue, then pasting a YouTube link to download a clip" width="900">
+<img src="https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/docs/images/demo.gif" alt="Typing an artist into TuneGrab, ticking two albums into the queue, then pasting a YouTube link to download a clip" width="900">
 
 </div>
 
@@ -33,7 +33,8 @@ irm https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/install.ps1 | ie
 ```
 
 It installs what it needs, adds TuneGrab to the Start menu and opens it. Run the same line
-again to update. macOS, Linux and manual installs are under **Install** below.
+again to update. On macOS or Linux, with [uv](https://docs.astral.sh/uv/), ffmpeg and Deno
+installed: `uv tool install tunegrab`, then `tunegrab serve`. Details under **Install** below.
 
 Then: **type an artist → tick what you want → Download.** That's it.
 
@@ -87,7 +88,7 @@ just a clip of it, or only its audio.
   so TuneGrab loads the complete list from YouTube Music.
 - Click a cover to queue the whole release, or **Choose songs** to tick individual tracks.
 
-<img src="docs/images/choose-songs.jpg" alt="The Choose songs panel with two tracks of an album ticked" width="800">
+<img src="https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/docs/images/choose-songs.jpg" alt="The Choose songs panel with two tracks of an album ticked" width="800">
 
 </details>
 
@@ -121,7 +122,7 @@ just a clip of it, or only its audio.
   video and it downloads that one, and remembers it for next time.
 - Download history is kept between sessions.
 
-<img src="docs/images/downloads.jpg" alt="The Downloads screen with an album half downloaded, showing match scores and per-song status" width="800">
+<img src="https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/docs/images/downloads.jpg" alt="The Downloads screen with an album half downloaded, showing match scores and per-song status" width="800">
 
 </details>
 
@@ -177,7 +178,7 @@ just a clip of it, or only its audio.
   file; songs another playlist still has are never deleted. For a CSV playlist, pick a newer
   export of it.
 
-<img src="docs/images/library.jpg" alt="The Library screen listing an album with its cover art" width="800">
+<img src="https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/docs/images/library.jpg" alt="The Library screen listing an album with its cover art" width="800">
 
 </details>
 
@@ -223,7 +224,7 @@ Paste a **YouTube** link (or one from any
 into **Get music** and press **Browse**. Save it as an **MP4** (up to 4K), as **audio only**,
 or just a **clip** between two times. Playlists download every video.
 
-<img src="docs/images/video.jpg" alt="A YouTube video in TuneGrab with Video (MP4), 1080p and a clip from 0:43 to 1:10 selected" width="900">
+<img src="https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/docs/images/video.jpg" alt="A YouTube video in TuneGrab with Video (MP4), 1080p and a clip from 0:43 to 1:10 selected" width="900">
 
 </details>
 
@@ -248,7 +249,7 @@ irm https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/install.ps1 | ie
 
 It installs uv, ffmpeg and Deno if they're missing (with winget), puts the latest release in
 `%LOCALAPPDATA%\Programs\TuneGrab`, adds TuneGrab to the Start menu and desktop, and opens it.
-Run the same line again to update. [Read the script](install.ps1) first if you like: it's short.
+Run the same line again to update. [Read the script](https://github.com/HAVEKAUTION/tunegrab/blob/main/install.ps1) first if you like: it's short.
 
 <details>
 <summary>Install by hand instead</summary>
@@ -271,10 +272,8 @@ Run the same line again to update. [Read the script](install.ps1) first if you l
 
 ```bash
 brew install uv ffmpeg deno
-git clone https://github.com/HAVEKAUTION/tunegrab.git
-cd tunegrab
-uv sync --no-dev                    # the app only, without developer tools
-uv run --no-dev tunegrab serve      # opens http://127.0.0.1:8765 in your browser
+uv tool install tunegrab            # from PyPI
+tunegrab serve                      # opens http://127.0.0.1:8765 in your browser
 ```
 
 </details>
@@ -288,10 +287,8 @@ uv run --no-dev tunegrab serve      # opens http://127.0.0.1:8765 in your browse
 curl -LsSf https://astral.sh/uv/install.sh | sh     # uv
 sudo apt install ffmpeg                             # or your distro's package manager
 curl -fsSL https://deno.land/install.sh | sh        # Deno
-git clone https://github.com/HAVEKAUTION/tunegrab.git
-cd tunegrab
-uv sync --no-dev
-uv run --no-dev tunegrab serve
+uv tool install tunegrab                            # from PyPI
+tunegrab serve
 ```
 
 </details>
@@ -320,8 +317,10 @@ it's out of date), your music folder and any Spotify credentials, and says what 
 To type `tunegrab` from any folder instead of `uv run tunegrab`:
 
 ```powershell
-uv tool install .
+uv tool install tunegrab      # from PyPI; or `uv tool install .` inside a clone
 ```
+
+`pip install tunegrab` works too (Python 3.11+); you still need ffmpeg and Deno.
 
 Stop TuneGrab first if it's running (Windows locks the program file while it runs).
 
@@ -333,7 +332,8 @@ Stop TuneGrab first if it's running (Windows locks the program file while it run
 <br>
 
 ```powershell
-git pull                          # get the latest TuneGrab
+git pull                          # a clone: get the latest TuneGrab
+uv tool upgrade tunegrab          # installed with `uv tool install`: TuneGrab and yt-dlp
 uv run tunegrab doctor --update   # update yt-dlp (do this whenever YouTube downloads start failing)
 ```
 
@@ -374,7 +374,7 @@ those too if you want them gone. Your music folder is never touched.
 
 <br>
 
-<img src="docs/images/get-music.jpg" alt="The Get music start screen with a search box and example artists" width="900">
+<img src="https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/docs/images/get-music.jpg" alt="The Get music start screen with a search box and example artists" width="900">
 
 <details>
 <summary><b>Download a few albums from an artist</b></summary>
@@ -457,7 +457,7 @@ Music is saved to **Music\TuneGrab** in your user folder unless you pick another
 **Settings → Music folder → Choose…** opens a folder picker. Press **Save**. File naming,
 format, quality, lyrics and how many songs download at once are on the same screen.
 
-<img src="docs/images/settings.jpg" alt="The Settings screen with music folder, audio format and download options" width="800">
+<img src="https://raw.githubusercontent.com/HAVEKAUTION/tunegrab/main/docs/images/settings.jpg" alt="The Settings screen with music folder, audio format and download options" width="800">
 
 </details>
 
@@ -575,7 +575,7 @@ To lift those limits:
    or run `tunegrab config set spotify_client_secret ...` to store it in the system keyring.
 3. Run `tunegrab login` once if you also want private playlists or Liked Songs.
 
-Full walkthrough: [`docs/SETUP.md`](docs/SETUP.md).
+Full walkthrough: [`docs/SETUP.md`](https://github.com/HAVEKAUTION/tunegrab/blob/main/docs/SETUP.md).
 
 </details>
 
@@ -840,7 +840,7 @@ uv run python scripts/check_design.py   # UI colour-contrast check
 | `src/tunegrab/web/` | FastAPI app and the single-page UI |
 | `docs/ARCHITECTURE.md` | Design |
 
-Changes per version: [`CHANGELOG.md`](CHANGELOG.md).
+Changes per version: [`CHANGELOG.md`](https://github.com/HAVEKAUTION/tunegrab/blob/main/CHANGELOG.md).
 
 </details>
 
@@ -857,7 +857,7 @@ fixes here, but I don't take feature requests or offer support. Forks are welcom
 
 ## License
 
-TuneGrab is free software under the [GNU General Public License v3.0 or later](LICENSE).
+TuneGrab is free software under the [GNU General Public License v3.0 or later](https://github.com/HAVEKAUTION/tunegrab/blob/main/LICENSE).
 You can use, change and share it; if you share a changed version, it must stay under the same licence.
 
 TuneGrab builds on [yt-dlp](https://github.com/yt-dlp/yt-dlp),
